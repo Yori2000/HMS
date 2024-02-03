@@ -81,13 +81,14 @@ def train():
 
     total_step      = len(dataset) / batch_size * num_epochs   
     checkpoint_dir  = Path("./checkpoint")
-    log_step        = 20
-    checkpoint_step = 10000
+    log_step        = 50
+    checkpoint_step = 25000
     valid_step      = 20
     writer          = SummaryWriter(log_dir="./checkpoint/logs")
     
     print("train start at : {}\ntotal_step : {}".format(datetime.datetime.now(), total_step))
     
+    model.train()
     current_step    = 1
     times           = []
     for epoch in range(num_epochs):
