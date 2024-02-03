@@ -5,3 +5,7 @@ test_eegs/
 train_spectrograms/
 test_spectrograms/
 *.csv
+*.out
+*.pyc
+*.pth
+checkpoint/*
