@@ -54,7 +54,9 @@ class HmsTrainDataset(Dataset):
         #return eeg, eeg_sub_id, eeg_label_offset_seconds, spectrogram, spectrogram_sub_id, \
         #    spectrogram_label_offset_seconds, label_id, patient_id, expert_consensus, seizure_vote, lpd_vote, gpd_vote, lrda_vote, grda_vote, other_vote
   
-  
+def collate_fn():
+    pass
+
 #TEST          
 if __name__ == "__main__":
     

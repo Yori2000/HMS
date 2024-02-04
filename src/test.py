@@ -20,30 +20,34 @@ class SimpleModel(nn.Module):
         super().__init__()
         
         self.conv_layer = nn.Sequential(OrderedDict([
-            ('conv1', nn.Conv1d(in_channel, 32, kernel_size=5)),
+            ('conv1',       nn.Conv1d(in_channel, 32, kernel_size=5, padding=2)),
             ('batch_norm1', nn.BatchNorm1d(32)),
-            ('relu1', nn.ReLU(32)),
-            ('pooling1', nn.AvgPool1d(4)),
+            ('relu1',       nn.ReLU(32)),
+            ('pooling1',    nn.AvgPool1d(4)),
             
-            ('conv2', nn.Conv1d(32, 64, kernel_size=5)),
+            ('conv2',       nn.Conv1d(32, 64, kernel_size=5, padding=2)),
             ('batch_norm2', nn.BatchNorm1d(64)),
-            ('relu2', nn.ReLU(64)),
-            ('pooling2', nn.AvgPool1d(4)),  
+            ('relu2',       nn.ReLU(64)),
+            ('pooling2',    nn.AvgPool1d(5)),  
             
-            ('conv3', nn.Conv1d(64, 64, kernel_size=5)),
+            ('conv3',       nn.Conv1d(64, 64, kernel_size=5, padding=2)),
             ('batch_norm3', nn.BatchNorm1d(64)),
-            ('relu3', nn.ReLU(64)),
-            ('pooling3', nn.AvgPool1d(4)),   
+            ('relu3',       nn.ReLU(64)),
+            ('pooling3',    nn.AvgPool1d(5)),   
         ]))
         
-        self.linear = nn.Linear(64, out_channel)
+        self.last_linear = nn.Sequential(OrderedDict([
+            ('linear1', nn.Linear(64 * 100, 512)),
+            ('linear2', nn.Linear(512, 256)),
+            ('linear3', nn.Linear(256, 64)),
+            ('linear4', nn.Linear(64, out_channel))
+        ]))
         
     def forward(self, x):
         
         out = self.conv_layer(x)
-        
-        out = F.avg_pool1d(out, out.shape[2]).squeeze()
-        out = self.linear(out)
+        out = torch.flatten(out, 1)
+        out = self.last_linear(out)
         out = F.softmax(out, dim=1)
         
         return out
@@ -59,7 +63,7 @@ class SimpleLoss(nn.Module):
         vote_probability    = F.normalize(vote_target.to(torch.float32), dim=1)
         vote_loss           = self.loss_vote(y, vote_probability)
         
-        consensus           = torch.eye(6, device=device)[torch.argmax(y, dim=1)]
+        consensus           = F.one_hot(torch.argmax(y, dim=1), num_classes=6).to(torch.float32)
         consensus_target    = F.one_hot(consensus_target, num_classes=6).to(torch.float32)
         consensus_loss      = self.loss_consensus(consensus, consensus_target)
         
@@ -68,7 +72,8 @@ class SimpleLoss(nn.Module):
 def train():
     
     num_epochs = 200
-    batch_size = 32
+    batch_size = 64
+    learning_rate = 0.01
   
     dataset     = HmsTrainDataset("./data", "./data/train.csv")
     trainloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
@@ -76,17 +81,18 @@ def train():
     
     model       = SimpleModel().to(device)
     loss_fn     = SimpleLoss()
-    optimizer   = optim.Adam(model.parameters(), lr=0.01, weight_decay=0.0001)
-    scheduler   = optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1)
+    optimizer   = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=0.0001)
+    #scheduler   = optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1)
 
-    total_step      = len(dataset) / batch_size * num_epochs   
+    total_step      = int(len(dataset) / batch_size * num_epochs) 
     checkpoint_dir  = Path("./checkpoint")
     log_step        = 50
     checkpoint_step = 25000
     valid_step      = 20
     writer          = SummaryWriter(log_dir="./checkpoint/logs")
     
-    print("train start at : {}\ntotal_step : {}".format(datetime.datetime.now(), total_step))
+    print("train start at : {}\ntotal_step : {}, step per epoch : {}\nepoch : {}, batch size : {}, learning rate : {}"
+          .format(datetime.datetime.now(), total_step, int(len(dataset)/batch_size), num_epochs, batch_size, learning_rate))
     
     model.train()
     current_step    = 1
@@ -105,7 +111,6 @@ def train():
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            scheduler.step()
             
             end             = time.time()
             time_per_batch  = end - start
@@ -113,7 +118,7 @@ def train():
             
             if current_step % log_step == 0:
                 
-                remain  = sum(times)/ current_step * (total_step - current_step)
+                remain  = (sum(times)/ current_step) * (total_step - current_step)
                 msg     = "Epoch : {}, Step : {}({:.3f}%), Loss : {:.5f}, Remaining Time : {:.3f}"\
                           .format(epoch, current_step, (current_step / total_step)*100, loss.item(), remain)
                 print(msg)
