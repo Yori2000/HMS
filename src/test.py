@@ -73,7 +73,7 @@ def train():
     
     num_epochs = 200
     batch_size = 64
-    learning_rate = 0.01
+    learning_rate = 1e-4
   
     dataset     = HmsTrainDataset("./data", "./data/train.csv")
     trainloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
@@ -82,7 +82,7 @@ def train():
     model       = SimpleModel().to(device)
     loss_fn     = SimpleLoss()
     optimizer   = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=0.0001)
-    #scheduler   = optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1)
+    scheduler   = optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1)
 
     total_step      = int(len(dataset) / batch_size * num_epochs) 
     checkpoint_dir  = Path("./checkpoint")
@@ -119,10 +119,13 @@ def train():
             if current_step % log_step == 0:
                 
                 remain  = (sum(times)/ current_step) * (total_step - current_step)
+                current_lr = scheduler.get_last_lr()[0]
                 msg     = "Epoch : {}, Step : {}({:.3f}%), Loss : {:.5f}, Remaining Time : {:.3f}"\
                           .format(epoch, current_step, (current_step / total_step)*100, loss.item(), remain)
                 print(msg)
-                writer.add_scalar("train_loss", loss.item(), current_step)
+                writer.add_scalar("train loss", loss.item(), current_step)
+                writer.add_scalar("learning rate", current_lr, current_step)
+                
                 
             if current_step % checkpoint_step == 0:
                 
@@ -143,10 +146,10 @@ def train():
             #             msg = "Valid\tEpoch : {}, Step : {}, valid Loss : {}"\
             #                   .format(epoch, current_step, loss.item())
             #             print(msg)
-            #             writer.add_scalar("valid_loss", loss.item(), current_step)
+            #             writer.add_scalar("valid loss", loss.item(), current_step)
             
             current_step += 1
-
+        scheduler.step()
         
 if __name__ == "__main__":
     
