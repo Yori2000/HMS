@@ -84,7 +84,7 @@ def train():
     optimizer   = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=0.0001)
     scheduler   = optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1)
 
-    total_step      = int(len(dataset) / batch_size * num_epochs) 
+    total_step      = int((len(dataset) / batch_size) * num_epochs) 
     checkpoint_dir  = Path("./checkpoint")
     log_step        = 50
     checkpoint_step = 25000
@@ -99,7 +99,7 @@ def train():
     times           = []
     for epoch in range(num_epochs):
         for batch in trainloader:
-            start = time.time()
+            start = time.perf_counter()
             
             eeg         = batch[0].to(device)
             consensus   = batch[1].to(device)
@@ -112,7 +112,7 @@ def train():
             loss.backward()
             optimizer.step()
             
-            end             = time.time()
+            end             = time.perf_counter()
             time_per_batch  = end - start
             times.append(time_per_batch)
             
