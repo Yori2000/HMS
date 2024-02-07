@@ -6,12 +6,65 @@ import polars as pl
 import torch
 from torch.utils.data import Dataset
 
-
 class HmsTrainDataset(Dataset):
+    def __init__(self, data_dir, filelist_csv):
+        self.data_dir = data_dir
+        self.data = pl.read_csv(filelist_csv)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        spectrogram              = pl.read_parquet(os.path.join(
+                                            self.data_dir, 'train_spectrograms', 
+                                            str(self.data['spectrogram_id'][idx]) + '.parquet'))
+        
+        eeg                      = pl.read_parquet(os.path.join(
+                                            self.data_dir, 'train_eegs', 
+                                            (str(self.data['eeg_id'][idx]) +  '.parquet')))
+        
+        eeg_sub_id               = self.data['eeg_sub_id'][idx]
+        eeg_label_offset_seconds = self.data['eeg_label_offset_seconds'][idx]
+        spectrogram_sub_id       = self.data['spectrogram_sub_id'][idx]
+        spectrogram_label_offset_seconds = self.data['spectrogram_label_offset_seconds'][idx]
+        label_id                 = self.data['label_id'][idx]
+        patient_id               = self.data['patient_id'][idx]
+        expert_consensus         = self.data['expert_consensus'][idx]
+        seizure_vote             = self.data['seizure_vote'][idx]
+        lpd_vote                 = self.data['lpd_vote'][idx]
+        gpd_vote                 = self.data['gpd_vote'][idx]
+        lrda_vote                = self.data['lrda_vote'][idx]
+        grda_vote                = self.data['grda_vote'][idx]
+        other_vote               = self.data['other_vote'][idx]
+
+        return eeg, eeg_sub_id, eeg_label_offset_seconds, spectrogram, spectrogram_sub_id, \
+            spectrogram_label_offset_seconds, label_id, patient_id, expert_consensus, seizure_vote, lpd_vote, gpd_vote, lrda_vote, grda_vote, other_vote
+            
+class HmsTrainDataset2(Dataset):
     def __init__(self, data_dir, filelist_csv):
         self.data_dir = Path(data_dir)
         self.data = pl.read_csv(filelist_csv)
-
+        self.data = self.get_idealized_eeg(self.data)
+        
+    def get_idealized_eeg(self, df):
+        
+        consensus = df["expert_consensus"]
+        idtfy_list = {"Seizure":9, "LPD":10, "GPD":11, "LRDA":12, "GRDA":13, "Other":14}
+        
+        def get_mask(x):
+            _c = x[8]
+            invalid_diagnosis = [v for k, v in idtfy_list.items() if k != _c]
+            threshold = int(x[idtfy_list[_c]]) / 4
+            if sum([x[i] for i in invalid_diagnosis]) < threshold:
+                return True
+            else:
+                return False
+            
+        
+        mask = df.map_rows(get_mask).get_columns()[0]
+        idealized = df.filter(mask)
+        return idealized
+    
     def __len__(self):
         return len(self.data)
 
@@ -62,7 +115,10 @@ if __name__ == "__main__":
     
     data_dir = "./data"
     csv_dir = "./data/train.csv"
-    dataset = HmsTrainDataset(data_dir, csv_dir)
-    
-        
-        
+    dataset = HmsTrainDataset2(data_dir, csv_dir)
+    print(len(dataset))
+    # for i in range(len(dataset)):
+    #     _, c, v = dataset[i]
+    #     print(i, c, v)
+    #     if i == 30:
+    #         break
