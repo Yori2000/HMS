@@ -1,11 +1,7 @@
-dataset/
-example_figures/
-train_eegs/
-test_eegs/
-train_spectrograms/
-test_spectrograms/
+data/*
 *.csv
 *.out
 *.pyc
 *.pth
 checkpoint/*
+outputs/*
