@@ -1,0 +1,14 @@
+name : Double_LSTM
+#input feature config
+sequence_length : 10000
+
+#shape config
+in_channel      : 20
+hidden_channel  : 32
+out_channel     : 6
+
+#conv config
+kernel_size     : 5
+
+#LSTM config
+bidirectional   : True

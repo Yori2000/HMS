@@ -3,5 +3,6 @@ data/*
 *.out
 *.pyc
 *.pth
+*.log
 checkpoint/*
 outputs/*

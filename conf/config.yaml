@@ -1,16 +1,16 @@
 name       : Conv-LSTM
 
 defaults:
-  - model: conv_lstm
+  - _self_
+  - model: Conv_LSTM
 
 dir:
   input        : ./data
-  save         : ./checkpoint/Conv_LSTM
 
 train:
   batch_size  : 32
   epochs      : 200
-  test_size   : 5
+  test_size   : 0.1
 
 optim:
   learning_rate: 0.001
@@ -23,4 +23,4 @@ lr_scheduler:
 step:
   log   : 50
   save  : 25000
-  valid : 2000
+  valid : 500

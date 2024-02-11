@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data.dataset import Subset
+from torch.utils.tensorboard import SummaryWriter
 from sklearn.model_selection import KFold, train_test_split
 
 from dataset import BufferDataset
@@ -11,9 +12,8 @@ from loss import KLDivLoss
 from analysis import AccuracyTable
 
 import hydra
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from collections import OrderedDict
-from torch.utils.tensorboard import SummaryWriter
 from pathlib import Path
 import numpy as np
 import time
@@ -49,13 +49,14 @@ def main(cfg : DictConfig, debug=False):
     # prepare for train---------------------------------------------------------------
     model.train()
     total_step  = int(len(trainset) / cfg.train.batch_size * cfg.train.epochs)
-    writer          = SummaryWriter(log_dir=(Path(cfg.dir.save) / "logs"))
+    checkpoint_dir = Path("./checkpoint/{}".format(cfg.name))
+    writer          = SummaryWriter(log_dir=(checkpoint_dir / "logs"))
     current_step    = 1
     times           = np.array([])
     acc_table       = AccuracyTable()
-    print("train start at : {}\ntotal_step : {}, epoch : {}, batch size : {}, learning rate : {}"
-          .format(datetime.datetime.now(), total_step, 
-                  cfg.train.epochs, cfg.train.batch_size, cfg.optim.learning_rate))
+    print("train start at : {}\ntotal_step : {}\n".format(datetime.datetime.now(), total_step))
+    print(OmegaConf.to_yaml(cfg))
+    print("\n---------------------------------------------------------------------------\n")
     
     # train start----------------------------------------------------------------------
     for epoch in range(cfg.train.epochs):
@@ -90,7 +91,7 @@ def main(cfg : DictConfig, debug=False):
                 
             if current_step % cfg.step.save == 0:
                 
-                path = cfg.dir.save / "{}.pth".format(current_step)
+                path = checkpoint_dir / "{}.pth".format(current_step)
                 torch.save(model.state_dict(), path)
             
             # validation ------------------------------------------------------------------------
@@ -111,10 +112,13 @@ def main(cfg : DictConfig, debug=False):
                             .format(epoch, current_step, loss)
                     print(msg)
                     writer.add_scalar("valid loss", loss, current_step)
-                        
+            
+            # batch end---------------------------------------------------------------        
             end             = time.perf_counter()
             times = np.append(times, end - start)
             current_step += 1
+            
+        #epoch end---------------------------------------------------------------------
         scheduler.step()
         
 if __name__ == "__main__":
