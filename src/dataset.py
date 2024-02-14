@@ -1,10 +1,11 @@
+import torch
+import torch.nn.functional as F
+from torch.utils.data import Dataset
+
 import os
 from pathlib import Path
-
 import numpy as np
 import polars as pl
-import torch
-from torch.utils.data import Dataset
       
 class BufferDataset(Dataset):
     def __init__(self, data_dir, idealized=False):
@@ -69,15 +70,87 @@ class BufferDataset(Dataset):
         
         return eegs, expert_consensus, vote
 
+    
+class NonOverlapDataset(Dataset):
+    def __init__(self, data_dir):
+        self.data_dir = Path(data_dir)
+        csv = pl.read_csv(self.data_dir / "train.csv")
+        self.data = self.create_df(csv)
+        self.max_offset = self.data.select(pl.col("max")).max()
+        
+    def create_df(self, df):
+        VOTE = df.columns[-6:]
+        train = df.group_by('eeg_id', maintain_order=True).agg(pl.min('eeg_label_offset_seconds').alias("min"))
+        max_offset = df.group_by('eeg_id', maintain_order=True).agg(pl.max('eeg_label_offset_seconds').alias("max"))
+        train = train.with_columns(max_offset)
 
+        vote_sum = df.group_by('eeg_id', maintain_order=True).sum().select(['eeg_id']+VOTE)
+        num_vote = vote_sum.select(VOTE).sum_horizontal()
+        vote_norm = vote_sum.select(VOTE) / num_vote
+        vote_norm = vote_sum.select('eeg_id').with_columns(vote_norm)
+        train = train.with_columns(vote_norm)
+        
+        consensus = df.group_by('eeg_id', maintain_order=True).agg(pl.first('expert_consensus'))
+        train = train.with_columns(consensus)
+
+        return train
+    
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        
+        eeg_id = self.data['eeg_id'][idx]
+        eeg_path  =  self.data_dir / 'train_eegs' / (str(eeg_id) +  '.parquet')
+        eeg                      = pl.read_parquet(eeg_path)
+        
+        eeg_offset_min = self.data['min'][idx]
+        eeg_offset_max = self.data['max'][idx]
+        
+        expert_consensus         = self.data['expert_consensus'][idx]
+        seizure_vote             = self.data['seizure_vote'][idx]
+        lpd_vote                 = self.data['lpd_vote'][idx]
+        gpd_vote                 = self.data['gpd_vote'][idx]
+        lrda_vote                = self.data['lrda_vote'][idx]
+        grda_vote                = self.data['grda_vote'][idx]
+        other_vote               = self.data['other_vote'][idx]
+
+        eeg_offset_frame         = int(eeg_offset_min * 200)
+        eeg_end_frame            = int((eeg_offset_max + 50) * 200)
+        
+        eeg_list = ["Fp1", "F3", "C3", "P3", "F7", "T3", "T5", "O1", "Fz", "Cz", 
+                    "Pz", "Fp2", "F4", "C4", "P4", "F8", "T4", "T6", "O2", "EKG"]
+        
+        eegs = [torch.from_numpy(np.nan_to_num(eeg[e][eeg_offset_frame:eeg_end_frame].to_numpy()))
+                for e in eeg_list]
+        eegs = torch.stack(eegs)
+
+        idtfy_idx = {"Seizure":0, "LPD":1, "GPD": 2, "LRDA": 3, "GRDA": 4, "Other":5}
+        expert_consensus = torch.tensor(idtfy_idx[expert_consensus])
+        vote = torch.tensor([seizure_vote, lpd_vote, gpd_vote, lrda_vote, grda_vote, other_vote])
+        
+        return eegs, expert_consensus, vote
+
+def collate_fn_nonoverlap(batch):
+    eegs = [b[0] for b in batch]
+    expert_consensus = [b[1] for b in batch]
+    vote = [b[2] for b in batch]
+    
+    max_length = max([eeg.shape[1] for eeg in eegs])
+    eegs = [F.pad(eeg, (0, max_length - eeg.shape[1]),"constant",0) for eeg in eegs]
+    eegs = torch.stack(eegs)
+    expert_consensus= torch.stack(expert_consensus)
+    vote = torch.stack(vote)
+    return eegs, expert_consensus, vote
 #TEST          
 if __name__ == "__main__":
     
     data_dir = "./data"
 
-    trainset = BufferDataset(data_dir, idealized=True)
-    # for i in range(len(dataset)):
-    #     _, c, v = dataset[i]
-    #     print(i, c, v)
-    #     if i == 30:
-    #         break
+    trainset = NonOverlapDataset(data_dir)
+    trainloader  = torch.utils.data.DataLoader(trainset, batch_size=8, shuffle=True, collate_fn=collate_fn)
+    for i, b in enumerate(trainloader):
+        e, c, v = b
+        print(i, e.shape, c, v)
+        if i == 1:
+            break

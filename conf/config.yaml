@@ -22,5 +22,5 @@ lr_scheduler:
 
 step:
   log   : 50
-  save  : 25000
+  save  : 5000
   valid : 500

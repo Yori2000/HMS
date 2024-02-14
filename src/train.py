@@ -6,12 +6,13 @@ from torch.utils.data.dataset import Subset
 from torch.utils.tensorboard import SummaryWriter
 from sklearn.model_selection import KFold, train_test_split
 
-from dataset import BufferDataset
+from dataset import BufferDataset, NonOverlapDataset, collate_fn_nonoverlap
 from models import Conv_LSTM, get_model
 from loss import KLDivLoss
 from analysis import AccuracyTable
 
 import hydra
+from hydra.utils import get_original_cwd, to_absolute_path
 from omegaconf import DictConfig, OmegaConf
 from collections import OrderedDict
 from pathlib import Path
@@ -19,6 +20,7 @@ import numpy as np
 import time
 import datetime
 import os
+from logging import getLogger ,StreamHandler, FileHandler, Formatter, INFO
 
 device = torch.device('cuda')
 
@@ -26,16 +28,39 @@ device = torch.device('cuda')
 def main(cfg : DictConfig, debug=False):
     if debug:
         torch.autograd.set_detect_anomaly(True)
+
+    # working directory------------------------------------------------------------------------------
+    cwd                 = Path(get_original_cwd())
+    checkpoint_dir      = cwd / "output" / cfg.name / "checkpoint"
+    config_dir          = cwd / "output" / cfg.name / "config"
+    tensorboard_dir     = cwd / "output" / cfg.name / "tensorboard"
+    logging_dir         = cwd / "output" / cfg.name / "log"
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    os.makedirs(config_dir, exist_ok=True)
+    os.makedirs(tensorboard_dir, exist_ok=True)
+    os.makedirs(logging_dir, exist_ok=True)
+    
+    # set logger-------------------------------------------------------------------------------------
+    logger = getLogger(__name__)
+    logger.setLevel(INFO)
+    format = "%(asctime)s [%(filename)s:%(lineno)d] %(message)s"
+    fl_handler = FileHandler(filename=(logging_dir/"train.log"), mode='w',encoding="utf-8")
+    fl_handler.setFormatter(Formatter(format))
+    fl_handler.setLevel(INFO)
+    logger.addHandler(fl_handler)
+    logger.info("train start")
+    logger.info(OmegaConf.to_yaml(cfg))
+    logger.info("---------------------------------------------------------------------------\n")
     
     # define dataset / dataloader -------------------------------------------------------------------
-    dataset     = BufferDataset(cfg.dir.input, idealized=True)
+    dataset     = NonOverlapDataset(cfg.dir.input)
     train_index, valid_index = train_test_split(range(len(dataset)),
                                                 test_size=cfg.train.test_size,random_state=0)
     trainset = Subset(dataset, train_index)
     validset = Subset(dataset, valid_index)
     
-    trainloader  = torch.utils.data.DataLoader(trainset, batch_size=cfg.train.batch_size, shuffle=True)
-    validloader  = torch.utils.data.DataLoader(validset, batch_size=cfg.train.batch_size, shuffle=False)
+    trainloader  = torch.utils.data.DataLoader(trainset, batch_size=cfg.train.batch_size, shuffle=True, collate_fn=collate_fn_nonoverlap)
+    validloader  = torch.utils.data.DataLoader(validset, batch_size=cfg.train.batch_size, shuffle=False, collate_fn=collate_fn_nonoverlap)
     
     # define model / loss function / optimizer ------------------------------------------------------
     model       = get_model(cfg.model).to(device)
@@ -48,15 +73,11 @@ def main(cfg : DictConfig, debug=False):
     
     # prepare for train---------------------------------------------------------------
     model.train()
-    total_step  = int(len(trainset) / cfg.train.batch_size * cfg.train.epochs)
-    checkpoint_dir = Path("./checkpoint/{}".format(cfg.name))
-    writer          = SummaryWriter(log_dir=(checkpoint_dir / "logs"))
+    total_step  = int(len(trainset) / cfg.train.batch_size * cfg.train.epochs)    
+    writer          = SummaryWriter(log_dir=tensorboard_dir)
     current_step    = 1
     times           = np.array([])
     acc_table       = AccuracyTable()
-    print("train start at : {}\ntotal_step : {}\n".format(datetime.datetime.now(), total_step))
-    print(OmegaConf.to_yaml(cfg))
-    print("\n---------------------------------------------------------------------------\n")
     
     # train start----------------------------------------------------------------------
     for epoch in range(cfg.train.epochs):
@@ -87,7 +108,7 @@ def main(cfg : DictConfig, debug=False):
                 msg     = "Epoch : {}, Step : {}({:.3f}%), Loss : {:.5f}, Remaining Time : {:.3f}"\
                           .format(epoch, current_step, (current_step / total_step)*100, loss.item(),
                                  (total_step - current_step)*np.mean(times))
-                print(msg)
+                logger.info(msg)
                 
             if current_step % cfg.step.save == 0:
                 
@@ -110,7 +131,7 @@ def main(cfg : DictConfig, debug=False):
                     loss = np.mean(valid_loss)
                     msg = "Valid\tEpoch : {}, Step : {}, valid Loss : {}"\
                             .format(epoch, current_step, loss)
-                    print(msg)
+                    logger.info(msg)
                     writer.add_scalar("valid loss", loss, current_step)
             
             # batch end---------------------------------------------------------------        
@@ -122,5 +143,4 @@ def main(cfg : DictConfig, debug=False):
         scheduler.step()
         
 if __name__ == "__main__":
-    
     main()
