@@ -20,14 +20,18 @@ import numpy as np
 import time
 import datetime
 import os
-from logging import getLogger ,StreamHandler, FileHandler, Formatter, INFO
+from logging import getLogger ,StreamHandler, FileHandler, Formatter
+import logging
 
 device = torch.device('cuda')
 
 @hydra.main(version_base=None, config_path="../conf", config_name="config")
-def main(cfg : DictConfig, debug=False):
-    if debug:
+def main(cfg : DictConfig):
+    
+    log_level = logging.INFO
+    if cfg.debug:
         torch.autograd.set_detect_anomaly(True)
+        log_level = logging.DEBUG
 
     # working directory------------------------------------------------------------------------------
     cwd                 = Path(get_original_cwd())
@@ -42,15 +46,15 @@ def main(cfg : DictConfig, debug=False):
     
     # set logger-------------------------------------------------------------------------------------
     logger = getLogger(__name__)
-    logger.setLevel(INFO)
+    logger.setLevel(log_level)
     format = "%(asctime)s [%(filename)s:%(lineno)d] %(message)s"
     fl_handler = FileHandler(filename=(logging_dir/"train.log"), mode='w',encoding="utf-8")
     fl_handler.setFormatter(Formatter(format))
-    fl_handler.setLevel(INFO)
+    fl_handler.setLevel(log_level)
     logger.addHandler(fl_handler)
     logger.info("train start")
-    logger.info(OmegaConf.to_yaml(cfg))
     logger.info("---------------------------------------------------------------------------\n")
+    OmegaConf.save(cfg, config_dir/"params.yaml")
     
     # define dataset / dataloader -------------------------------------------------------------------
     dataset     = NonOverlapDataset(cfg.dir.input)
@@ -71,14 +75,21 @@ def main(cfg : DictConfig, debug=False):
     scheduler   = optim.lr_scheduler.StepLR(optimizer, step_size=cfg.lr_scheduler.step,
                                             gamma=cfg.lr_scheduler.gamma)
     
+    # train start----------------------------------------------------------------------
+    try:
+        train(cfg, logger, model, loss_fn, optimizer, scheduler, trainloader, validloader, checkpoint_dir, tensorboard_dir)
+    except Exception as e:
+        logger.exception(e)
+        
+
+def train(cfg, logger, model, loss_fn, optimizer, scheduler, trainloader, validloader, checkpoint_dir, tensorboard_dir):  
     # prepare for train---------------------------------------------------------------
     model.train()
-    total_step  = int(len(trainset) / cfg.train.batch_size * cfg.train.epochs)    
+    total_step  = int(len(trainloader) * cfg.train.epochs)    
     writer          = SummaryWriter(log_dir=tensorboard_dir)
     current_step    = 1
     times           = np.array([])
     acc_table       = AccuracyTable()
-    
     # train start----------------------------------------------------------------------
     for epoch in range(cfg.train.epochs):
         for batch in trainloader:
@@ -141,6 +152,8 @@ def main(cfg : DictConfig, debug=False):
             
         #epoch end---------------------------------------------------------------------
         scheduler.step()
+        logger.info("epoch {} end".format(epoch))
+        logger.info("---------------------------------------------------------------------------\n")
         
 if __name__ == "__main__":
     main()

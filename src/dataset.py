@@ -148,7 +148,9 @@ if __name__ == "__main__":
     data_dir = "./data"
 
     trainset = NonOverlapDataset(data_dir)
-    trainloader  = torch.utils.data.DataLoader(trainset, batch_size=8, shuffle=True, collate_fn=collate_fn)
+    trainloader  = torch.utils.data.DataLoader(trainset, batch_size=8, shuffle=True, collate_fn=collate_fn_nonoverlap)
+    print(len(trainset))
+    print(len(trainloader))
     for i, b in enumerate(trainloader):
         e, c, v = b
         print(i, e.shape, c, v)
