@@ -1,4 +1,5 @@
 name       : Conv-LSTM
+device     : cuda
 debug      : False
 
 defaults:

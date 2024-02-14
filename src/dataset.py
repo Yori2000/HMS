@@ -92,6 +92,10 @@ class NonOverlapDataset(Dataset):
         
         consensus = df.group_by('eeg_id', maintain_order=True).agg(pl.first('expert_consensus'))
         train = train.with_columns(consensus)
+        
+        vote_max = train.select(pl.col(VOTE)).max_horizontal().alias("vote_max")
+        train = train.with_columns(vote_max)
+        train = train.filter(pl.col('vote_max') > 0.75)
 
         return train
     
@@ -131,7 +135,7 @@ class NonOverlapDataset(Dataset):
         
         return eegs, expert_consensus, vote
 
-def collate_fn_nonoverlap(batch):
+def collate_fn(batch):
     eegs = [b[0] for b in batch]
     expert_consensus = [b[1] for b in batch]
     vote = [b[2] for b in batch]
@@ -148,7 +152,7 @@ if __name__ == "__main__":
     data_dir = "./data"
 
     trainset = NonOverlapDataset(data_dir)
-    trainloader  = torch.utils.data.DataLoader(trainset, batch_size=8, shuffle=True, collate_fn=collate_fn_nonoverlap)
+    trainloader  = torch.utils.data.DataLoader(trainset, batch_size=8, shuffle=True, collate_fn=collate_fn)
     print(len(trainset))
     print(len(trainloader))
     for i, b in enumerate(trainloader):

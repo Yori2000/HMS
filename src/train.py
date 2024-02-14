@@ -6,10 +6,11 @@ from torch.utils.data.dataset import Subset
 from torch.utils.tensorboard import SummaryWriter
 from sklearn.model_selection import KFold, train_test_split
 
-from dataset import BufferDataset, NonOverlapDataset, collate_fn_nonoverlap
+from dataset import BufferDataset, NonOverlapDataset, collate_fn
 from models import Conv_LSTM, get_model
 from loss import KLDivLoss
 from analysis import AccuracyTable
+from utils import setup
 
 import hydra
 from hydra.utils import get_original_cwd, to_absolute_path
@@ -23,48 +24,26 @@ import os
 from logging import getLogger ,StreamHandler, FileHandler, Formatter
 import logging
 
-device = torch.device('cuda')
-
 @hydra.main(version_base=None, config_path="../conf", config_name="config")
 def main(cfg : DictConfig):
     
-    log_level = logging.INFO
-    if cfg.debug:
-        torch.autograd.set_detect_anomaly(True)
-        log_level = logging.DEBUG
-
-    # working directory------------------------------------------------------------------------------
-    cwd                 = Path(get_original_cwd())
-    checkpoint_dir      = cwd / "output" / cfg.name / "checkpoint"
-    config_dir          = cwd / "output" / cfg.name / "config"
-    tensorboard_dir     = cwd / "output" / cfg.name / "tensorboard"
-    logging_dir         = cwd / "output" / cfg.name / "log"
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    os.makedirs(config_dir, exist_ok=True)
-    os.makedirs(tensorboard_dir, exist_ok=True)
-    os.makedirs(logging_dir, exist_ok=True)
+    cfg, device, logger = setup(cfg)
     
-    # set logger-------------------------------------------------------------------------------------
-    logger = getLogger(__name__)
-    logger.setLevel(log_level)
-    format = "%(asctime)s [%(filename)s:%(lineno)d] %(message)s"
-    fl_handler = FileHandler(filename=(logging_dir/"train.log"), mode='w',encoding="utf-8")
-    fl_handler.setFormatter(Formatter(format))
-    fl_handler.setLevel(log_level)
-    logger.addHandler(fl_handler)
     logger.info("train start")
     logger.info("---------------------------------------------------------------------------\n")
-    OmegaConf.save(cfg, config_dir/"params.yaml")
+    OmegaConf.save(cfg, Path(cfg.dir.config)/"params.yaml")
     
     # define dataset / dataloader -------------------------------------------------------------------
-    dataset     = NonOverlapDataset(cfg.dir.input)
-    train_index, valid_index = train_test_split(range(len(dataset)),
+    dataset                     = NonOverlapDataset(cfg.dir.input)
+    train_index, valid_index    = train_test_split(range(len(dataset)),
                                                 test_size=cfg.train.test_size,random_state=0)
-    trainset = Subset(dataset, train_index)
-    validset = Subset(dataset, valid_index)
+    trainset                    = Subset(dataset, train_index)
+    validset                    = Subset(dataset, valid_index)
     
-    trainloader  = torch.utils.data.DataLoader(trainset, batch_size=cfg.train.batch_size, shuffle=True, collate_fn=collate_fn_nonoverlap)
-    validloader  = torch.utils.data.DataLoader(validset, batch_size=cfg.train.batch_size, shuffle=False, collate_fn=collate_fn_nonoverlap)
+    trainloader                 = torch.utils.data.DataLoader(trainset, batch_size=cfg.train.batch_size,
+                                                              shuffle=True, collate_fn=collate_fn)
+    validloader                 = torch.utils.data.DataLoader(validset, batch_size=cfg.train.batch_size,
+                                                              shuffle=False, collate_fn=collate_fn)
     
     # define model / loss function / optimizer ------------------------------------------------------
     model       = get_model(cfg.model).to(device)
@@ -77,16 +56,16 @@ def main(cfg : DictConfig):
     
     # train start----------------------------------------------------------------------
     try:
-        train(cfg, logger, model, loss_fn, optimizer, scheduler, trainloader, validloader, checkpoint_dir, tensorboard_dir)
+        train(cfg, logger, model, loss_fn, optimizer, scheduler, trainloader, validloader, device)
     except Exception as e:
         logger.exception(e)
         
 
-def train(cfg, logger, model, loss_fn, optimizer, scheduler, trainloader, validloader, checkpoint_dir, tensorboard_dir):  
+def train(cfg, logger, model, loss_fn, optimizer, scheduler, trainloader, validloader, device):  
     # prepare for train---------------------------------------------------------------
     model.train()
-    total_step  = int(len(trainloader) * cfg.train.epochs)    
-    writer          = SummaryWriter(log_dir=tensorboard_dir)
+    total_step      = int(len(trainloader) * cfg.train.epochs)    
+    writer          = SummaryWriter(log_dir=cfg.dir.tensorboard)
     current_step    = 1
     times           = np.array([])
     acc_table       = AccuracyTable()
@@ -100,8 +79,8 @@ def train(cfg, logger, model, loss_fn, optimizer, scheduler, trainloader, validl
             consensus   = batch[1].to(device)
             vote        = batch[2].to(device)
 
-            out     = model(eeg)
-            loss    = loss_fn(out, vote)
+            out         = model(eeg)
+            loss        = loss_fn(out, vote)
             
             # optimeze model------------------------------------------------------------
             optimizer.zero_grad()
@@ -123,7 +102,7 @@ def train(cfg, logger, model, loss_fn, optimizer, scheduler, trainloader, validl
                 
             if current_step % cfg.step.save == 0:
                 
-                path = checkpoint_dir / "{}.pth".format(current_step)
+                path = Path(cfg.dir.checkpoint) / "{}.pth".format(current_step)
                 torch.save(model.state_dict(), path)
             
             # validation ------------------------------------------------------------------------
@@ -136,8 +115,8 @@ def train(cfg, logger, model, loss_fn, optimizer, scheduler, trainloader, validl
                         consensus   = b[1]
                         vote        = b[2].to(device)
 
-                        out              = model(eeg)
-                        loss             = loss_fn(out, vote)
+                        out         = model(eeg)
+                        loss        = loss_fn(out, vote)
                         valid_loss = np.append(valid_loss, loss.clone().to('cpu').detach().numpy())
                     loss = np.mean(valid_loss)
                     msg = "Valid\tEpoch : {}, Step : {}, valid Loss : {}"\

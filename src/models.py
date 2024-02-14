@@ -4,14 +4,14 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 from modules import ConvLSTM
+from utils import Config
 
 from collections import OrderedDict
 from omegaconf import DictConfig
+from logging import getLogger
 
-class Config(dict): 
-    def __init__(self, *args, **kwargs): 
-        super().__init__(*args, **kwargs) 
-        self.__dict__ = self 
+logger = getLogger('main').getChild('model')
+
 
 def get_model(cfg):
     models = []
@@ -136,34 +136,36 @@ class LSTM_Pool(nn.Module):
         super().__init__()
         
         padding = int((cfg.kernel_size - 1) // 2)
+        # self.lstm1 = nn.LSTM(cfg.in_channel, cfg. hidden_channel, 
+        #                      batch_first=True, bidirectional=cfg.bidirectional)
         
         self.conv_layer = nn.Sequential(OrderedDict([
-            ('conv1',       nn.Conv1d(cfg.in_channel, cfg.hidden_channel*2, 
+            ('conv1',       nn.Conv1d(cfg.in_channel, cfg.hidden_channel, 
                                       kernel_size=cfg.kernel_size, padding=padding)),
-            ('batch_norm1', nn.BatchNorm1d(cfg.hidden_channel*2)),
-            ('relu1',       nn.ReLU(cfg.hidden_channel*2)),
+            ('batch_norm1', nn.BatchNorm1d(cfg.hidden_channel)),
+            ('relu1',       nn.ReLU(cfg.hidden_channel)),
             ('pooling1',    nn.AvgPool1d(4)),
             
-            ('conv2',       nn.Conv1d(cfg.hidden_channel*2, cfg.hidden_channel * 4,
+            ('conv2',       nn.Conv1d(cfg.hidden_channel, cfg.hidden_channel * 2,
                                       kernel_size=cfg.kernel_size, padding=padding)),
-            ('batch_norm2', nn.BatchNorm1d(cfg.hidden_channel * 4)),
-            ('relu2',       nn.ReLU(cfg.hidden_channel * 4)),
+            ('batch_norm2', nn.BatchNorm1d(cfg.hidden_channel * 2)),
+            ('relu2',       nn.ReLU(cfg.hidden_channel * 2)),
             ('pooling2',    nn.AvgPool1d(4)),
             
-            ('conv3',       nn.Conv1d(cfg.hidden_channel * 4, cfg.hidden_channel * 8,
+            ('conv3',       nn.Conv1d(cfg.hidden_channel * 2, cfg.hidden_channel * 4,
                                       kernel_size=cfg.kernel_size, padding=padding)),
-            ('batch_norm3', nn.BatchNorm1d(cfg.hidden_channel * 8)),
-            ('relu3',       nn.ReLU(cfg.hidden_channel * 8)),
+            ('batch_norm3', nn.BatchNorm1d(cfg.hidden_channel * 4)),
+            ('relu3',       nn.ReLU(cfg.hidden_channel * 4)),
             ('pooling3',    nn.AvgPool1d(5)),
             
-            ('conv4',       nn.Conv1d(cfg.hidden_channel * 8, cfg.hidden_channel * 16,
+            ('conv4',       nn.Conv1d(cfg.hidden_channel * 4, cfg.hidden_channel * 8,
                                       kernel_size=cfg.kernel_size, padding=padding)),
-            ('batch_norm4', nn.BatchNorm1d(cfg.hidden_channel * 16)),
-            ('relu4',       nn.ReLU(cfg.hidden_channel * 16)),
+            ('batch_norm4', nn.BatchNorm1d(cfg.hidden_channel * 8)),
+            ('relu4',       nn.ReLU(cfg.hidden_channel * 8)),
             ('pooling4',    nn.AvgPool1d(5))
         ]))
         
-        self.lstm2 = nn.LSTM(cfg.hidden_channel * 16, cfg.hidden_channel * 16,
+        self.lstm2 = nn.LSTM(cfg.hidden_channel * 8, cfg.hidden_channel * 16,
                              batch_first=True, bidirectional=cfg.bidirectional)
         
         self.last_linear = nn.Sequential(OrderedDict([
@@ -176,7 +178,9 @@ class LSTM_Pool(nn.Module):
         ]))
         
     def forward(self, x):
-        
+        # x = x.permute(0,2,1)
+        # out, _ = self.lstm1(x)
+        # out = out.permute(0,2,1)
         out = self.conv_layer(x)
         out = out.permute(0,2,1)
         out, _ = self.lstm2(out)
