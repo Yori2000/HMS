@@ -6,6 +6,7 @@ from hydra.utils import get_original_cwd
 from omegaconf import OmegaConf
 from logging import getLogger ,StreamHandler, FileHandler, Formatter
 import logging
+import wandb
 
 class Config(dict): 
     def __init__(self, *args, **kwargs): 
@@ -15,8 +16,6 @@ class Config(dict):
         
 def setup(cfg):
     
-    OmegaConf.set_struct(cfg, False)
-
     _device = torch.device(cfg.device)
     
     log_level = logging.INFO
@@ -26,13 +25,13 @@ def setup(cfg):
 
     # working directory------------------------------------------------------------------------------
     cwd                 = Path(get_original_cwd())
-    cfg.dir.checkpoint      = str(cwd / "output" / cfg.name / "checkpoint")
-    cfg.dir.config          = str(cwd / "output" / cfg.name / "config")
-    cfg.dir.tensorboard     = str(cwd / "output" / cfg.name / "tensorboard")
-    cfg.dir.logging         = str(cwd / "output" / cfg.name / "log")
+    OmegaConf.set_struct(cfg, False)
+    cfg.dir.checkpoint      = str(cwd / "product" / cfg.exp_name / "checkpoint")
+    cfg.dir.config          = str(cwd / "product" / cfg.exp_name / "config")
+    cfg.dir.logging         = str(cwd / "product" / cfg.exp_name / "log")
+    OmegaConf.set_struct(cfg, True)
     os.makedirs(cfg.dir.checkpoint  , exist_ok=True)
     os.makedirs(cfg.dir.config      , exist_ok=True)
-    os.makedirs(cfg.dir.tensorboard , exist_ok=True)
     os.makedirs(cfg.dir.logging     , exist_ok=True)
     
     # set logger-------------------------------------------------------------------------------------
@@ -43,7 +42,5 @@ def setup(cfg):
     fl_handler.setFormatter(Formatter(format))
     fl_handler.setLevel(log_level)
     _logger.addHandler(fl_handler)
-    
-    OmegaConf.set_struct(cfg, True)
     
     return cfg, _device, _logger

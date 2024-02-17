@@ -1,17 +1,19 @@
-name       : Conv-LSTM
+exp_name   : LSTM_Pool
 device     : cuda
 debug      : False
 
 defaults:
   - _self_
-  - model: Conv_LSTM
+  - model: LSTM_Pool
+
+dataset : EEGDataset
 
 dir:
   input        : ./data
 
 train:
-  batch_size  : 32
-  epochs      : 200
+  batch_size  : 16
+  epochs      : 500
   test_size   : 0.1
 
 optim:
@@ -20,9 +22,9 @@ optim:
 
 lr_scheduler:
   step   : 40
-  gamma  : 0.1
+  gamma  : 0.8
 
 step:
   log   : 50
   save  : 5000
-  valid : 500
+  valid : 250

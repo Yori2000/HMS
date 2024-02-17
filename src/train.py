@@ -3,11 +3,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data.dataset import Subset
-from torch.utils.tensorboard import SummaryWriter
+
 from sklearn.model_selection import KFold, train_test_split
 
-from dataset import BufferDataset, NonOverlapDataset, collate_fn
-from models import Conv_LSTM, get_model
+from dataset import get_dataset, collate_fn
+from models import get_model
 from loss import KLDivLoss
 from analysis import AccuracyTable
 from utils import setup
@@ -23,6 +23,7 @@ import datetime
 import os
 from logging import getLogger ,StreamHandler, FileHandler, Formatter
 import logging
+import wandb
 
 @hydra.main(version_base=None, config_path="../conf", config_name="config")
 def main(cfg : DictConfig):
@@ -34,7 +35,7 @@ def main(cfg : DictConfig):
     OmegaConf.save(cfg, Path(cfg.dir.config)/"params.yaml")
     
     # define dataset / dataloader -------------------------------------------------------------------
-    dataset                     = NonOverlapDataset(cfg.dir.input)
+    dataset                     = get_dataset(cfg)
     train_index, valid_index    = train_test_split(range(len(dataset)),
                                                 test_size=cfg.train.test_size,random_state=0)
     trainset                    = Subset(dataset, train_index)
@@ -63,9 +64,10 @@ def main(cfg : DictConfig):
 
 def train(cfg, logger, model, loss_fn, optimizer, scheduler, trainloader, validloader, device):  
     # prepare for train---------------------------------------------------------------
+    wandb.init(project="HMS", name=cfg.exp_name,config=dict(cfg))
+    wandb.watch(model)
     model.train()
     total_step      = int(len(trainloader) * cfg.train.epochs)    
-    writer          = SummaryWriter(log_dir=cfg.dir.tensorboard)
     current_step    = 1
     times           = np.array([])
     acc_table       = AccuracyTable()
@@ -88,18 +90,16 @@ def train(cfg, logger, model, loss_fn, optimizer, scheduler, trainloader, validl
             optimizer.step()
             current_lr = scheduler.get_last_lr()[0]
             
-            # analysis / logging / save model -----------------------------------------------------
-            writer.add_scalar("train loss", loss.item(), current_step)
-            writer.add_scalar("learning rate", current_lr, current_step)
-            acc_table.add(out, consensus)
-            acc_table.write_tensorboard(writer, current_step)
-            
+            # logging -----------------------------------------------------
             if current_step % cfg.step.log == 0:
                 msg     = "Epoch : {}, Step : {}({:.3f}%), Loss : {:.5f}, Remaining Time : {:.3f}"\
                           .format(epoch, current_step, (current_step / total_step)*100, loss.item(),
                                  (total_step - current_step)*np.mean(times))
                 logger.info(msg)
                 
+                wandb.log({"train_loss": loss.item(), "learning_rate":current_lr}, step=current_step)
+            
+            # save model -----------------------------------------------------  
             if current_step % cfg.step.save == 0:
                 
                 path = Path(cfg.dir.checkpoint) / "{}.pth".format(current_step)
@@ -112,18 +112,21 @@ def train(cfg, logger, model, loss_fn, optimizer, scheduler, trainloader, validl
                     valid_loss  = np.array([])
                     for b in validloader:
                         eeg         = b[0].to(device)
-                        consensus   = b[1]
+                        consensus   = b[1].to(device)
                         vote        = b[2].to(device)
 
                         out         = model(eeg)
                         loss        = loss_fn(out, vote)
                         valid_loss = np.append(valid_loss, loss.clone().to('cpu').detach().numpy())
+                        acc_table.add(out, consensus)
+                        
                     loss = np.mean(valid_loss)
                     msg = "Valid\tEpoch : {}, Step : {}, valid Loss : {}"\
                             .format(epoch, current_step, loss)
                     logger.info(msg)
-                    writer.add_scalar("valid loss", loss, current_step)
             
+                    acc_table.log_wandb(current_step)
+                    wandb.log({"valid loss":loss}, step=current_step)
             # batch end---------------------------------------------------------------        
             end             = time.perf_counter()
             times = np.append(times, end - start)
@@ -133,6 +136,7 @@ def train(cfg, logger, model, loss_fn, optimizer, scheduler, trainloader, validl
         scheduler.step()
         logger.info("epoch {} end".format(epoch))
         logger.info("---------------------------------------------------------------------------\n")
+    wandb.finish()
         
 if __name__ == "__main__":
     main()

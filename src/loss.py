@@ -8,8 +8,8 @@ class KLDivLoss(nn.Module):
         self.loss_vote      = nn.KLDivLoss(reduction='batchmean')
         
     def forward(self, y, vote_target):
-        vote_probability    = F.normalize(vote_target.to(torch.float32), dim=1)
+        
         y = torch.log(y + 1e-12)
-        vote_loss           = self.loss_vote(y, vote_probability)
+        vote_loss           = self.loss_vote(y, vote_target)
         
         return vote_loss

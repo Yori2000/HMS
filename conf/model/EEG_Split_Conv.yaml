@@ -1,4 +1,4 @@
-name : EEG_Split_Conv
+model_name : EEG_Split_Conv
 
 #shape config
 in_channels:

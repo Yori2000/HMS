@@ -6,4 +6,5 @@ data/*
 *.log
 checkpoint/*
 outputs/*
-output/*
+product/*
+wandb/*

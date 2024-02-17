@@ -6,46 +6,46 @@ import os
 from pathlib import Path
 import numpy as np
 import polars as pl
-      
-class BufferDataset(Dataset):
-    def __init__(self, data_dir, idealized=False):
+from logging import getLogger
+
+logger = getLogger('main').getChild('dataset')
+
+def get_dataset(cfg):
+    if cfg.dataset =='EEGDataset':
+        return EEGDataset(cfg.dir.input)
+    elif cfg.dataset == 'NonOverlapDataset':
+        return NonOverlapDataset(cfg.dir.input)
+
+class EEGDataset(Dataset):
+    def __init__(self, data_dir):
         self.data_dir = Path(data_dir)
-        self.data = pl.read_csv(self.data_dir / "train.csv")
-        if idealized:
-            self.data = self.select_idealize(self.data)
+        csv = pl.read_csv(self.data_dir / "train.csv")
+        self.data = self.create_df(csv)
+    
+    def create_df(self, df):
+        VOTE = df.columns[-6:]
+        train = df.select('eeg_id', 'eeg_label_offset_seconds','expert_consensus')
         
-    def select_idealize(self, df):
-        consensus = df["expert_consensus"]
-        idtfy_list = {"Seizure":9, "LPD":10, "GPD":11, "LRDA":12, "GRDA":13, "Other":14}
+        num_vote = df.select(VOTE).sum_horizontal()
+        vote_norm = df.select(VOTE) / num_vote
+        train = train.with_columns(vote_norm)
         
-        def get_mask(x):
-            _c = x[8]
-            invalid_diagnosis = [v for k, v in idtfy_list.items() if k != _c]
-            threshold = int(x[idtfy_list[_c]]) / 4
-            if sum([x[i] for i in invalid_diagnosis]) < threshold:
-                return True
-            else:
-                return False
-        mask = df.map_rows(get_mask).get_columns()[0]
-        idealized = df.filter(mask)
-        return idealized
+        vote_max = train.select(pl.col(VOTE)).max_horizontal().alias("vote_max")
+        train = train.with_columns(vote_max)
+        train = train.filter(pl.col('vote_max') > 0.7)
+
+        return train
     
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
-        spc_path = self.data_dir / 'train_spectrograms'/ (str(self.data['spectrogram_id'][idx]) + '.parquet')
-        eeg_path  =  self.data_dir / 'train_eegs' / (str(self.data['eeg_id'][idx]) +  '.parquet')
-
-        spectrogram              = pl.read_parquet(spc_path)
+        
+        eeg_id = self.data['eeg_id'][idx]
+        eeg_path  =  self.data_dir / 'train_eegs' / (str(eeg_id) +  '.parquet')
         eeg                      = pl.read_parquet(eeg_path)
         
-        eeg_sub_id               = self.data['eeg_sub_id'][idx]
         eeg_label_offset_seconds = self.data['eeg_label_offset_seconds'][idx]
-        spectrogram_sub_id       = self.data['spectrogram_sub_id'][idx]
-        spectrogram_label_offset_seconds = self.data['spectrogram_label_offset_seconds'][idx]
-        label_id                 = self.data['label_id'][idx]
-        patient_id               = self.data['patient_id'][idx]
         expert_consensus         = self.data['expert_consensus'][idx]
         seizure_vote             = self.data['seizure_vote'][idx]
         lpd_vote                 = self.data['lpd_vote'][idx]
@@ -96,7 +96,8 @@ class NonOverlapDataset(Dataset):
         vote_max = train.select(pl.col(VOTE)).max_horizontal().alias("vote_max")
         train = train.with_columns(vote_max)
         train = train.filter(pl.col('vote_max') > 0.75)
-
+        
+        train = train.filter(pl.col('max') < 500)
         return train
     
     def __len__(self):
@@ -145,16 +146,18 @@ def collate_fn(batch):
     eegs = torch.stack(eegs)
     expert_consensus= torch.stack(expert_consensus)
     vote = torch.stack(vote)
+    #debug shape
+    logger.debug("eeg shape : {}".format(eegs.shape))
+    
     return eegs, expert_consensus, vote
 #TEST          
 if __name__ == "__main__":
     
     data_dir = "./data"
 
-    trainset = NonOverlapDataset(data_dir)
+    trainset = BufferDataset(data_dir)
     trainloader  = torch.utils.data.DataLoader(trainset, batch_size=8, shuffle=True, collate_fn=collate_fn)
-    print(len(trainset))
-    print(len(trainloader))
+
     for i, b in enumerate(trainloader):
         e, c, v = b
         print(i, e.shape, c, v)
