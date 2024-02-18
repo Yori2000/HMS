@@ -1,4 +1,4 @@
-exp_name   : LSTM_Pool
+exp_name   : Test
 device     : cuda
 debug      : False
 

@@ -6,23 +6,17 @@ from torch.utils.data.dataset import Subset
 
 from sklearn.model_selection import KFold, train_test_split
 
-from dataset import get_dataset, collate_fn
+from dataset import get_dataset
 from models import get_model
 from loss import KLDivLoss
 from analysis import AccuracyTable
 from utils import setup
 
 import hydra
-from hydra.utils import get_original_cwd, to_absolute_path
 from omegaconf import DictConfig, OmegaConf
-from collections import OrderedDict
 from pathlib import Path
 import numpy as np
 import time
-import datetime
-import os
-from logging import getLogger ,StreamHandler, FileHandler, Formatter
-import logging
 import wandb
 
 @hydra.main(version_base=None, config_path="../conf", config_name="config")
@@ -35,7 +29,7 @@ def main(cfg : DictConfig):
     OmegaConf.save(cfg, Path(cfg.dir.config)/"params.yaml")
     
     # define dataset / dataloader -------------------------------------------------------------------
-    dataset                     = get_dataset(cfg)
+    dataset, collate_fn         = get_dataset(cfg)
     train_index, valid_index    = train_test_split(range(len(dataset)),
                                                 test_size=cfg.train.test_size,random_state=0)
     trainset                    = Subset(dataset, train_index)

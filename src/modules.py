@@ -15,7 +15,7 @@ class Expansion(nn.Module):
             ('conv',       nn.Conv1d(in_channel*(2**i), in_channel*(2**(i+1)), 
                                       kernel_size=kernel_size, padding=padding)),
             ('batch_norm', nn.BatchNorm1d(in_channel*(2**(i+1)))),
-            ('relu',       nn.ReLU(in_channel*(2**(i+1)))),
+            ('relu',       nn.LeakyReLU()),
             ('pooling',    nn.AvgPool1d(p))
             ])) for i, p in enumerate(pool)])
 

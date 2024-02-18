@@ -1,0 +1,33 @@
+model_name : Ensemble
+
+ensemble_type : linear
+models :
+ - Conv_Flatten
+ - Conv_Pool
+
+Conv_Flatten:
+  model_path : /work/abelab4/k_hiro/study/HMS/product/CONV_FLATTEN/checkpoint/130000.pth
+  sequence_length : 10000
+  in_channel      : 20
+  hidden_channel  : 32
+  out_channel     : 6
+  kernel_size     : 5
+  pool :
+    - 4
+    - 4
+    - 5
+    - 5
+  bidirectional   : True
+
+Conv_Pool:
+  model_path : /work/abelab4/k_hiro/study/HMS/product/CONV_POOL/checkpoint/160000.pth
+  in_channel      : 20
+  hidden_channel  : 32
+  out_channel     : 6
+  kernel_size     : 5
+  pool :
+    - 4
+    - 4
+    - 5
+    - 5
+  bidirectional   : True

@@ -6,6 +6,7 @@ import torch.optim as optim
 from modules import ConvLSTM, Expansion
 from utils import Config
 
+import hydra
 from collections import OrderedDict
 from omegaconf import DictConfig
 from logging import getLogger
@@ -23,8 +24,41 @@ def get_model(cfg):
         return Conv_Pool(cfg)
     elif cfg.model_name == 'EEG_Split_Conv':
         return EEG_Split_Conv(cfg)
-    
-    
+    elif cfg.model_name == 'Wavelet_Conv':
+        return Wavelet_Conv(cfg)
+    elif cfg.model_name == 'Ensemble':
+        return Ensemble(cfg)
+
+class Ensemble(nn.Module):
+    def __init__(self,cfg):
+        super().__init__()
+        self.ensemble_type = cfg.ensemble_type
+        self.model_list = nn.ModuleList([
+            Conv_Flatten(cfg.Conv_Flatten).load_state_dict(torch.load(cfg.Conv_Flatten.model_path)),
+            Conv_Pool(cfg.Conv_Pool).load_state_dict(torch.load(cfg.Conv_Pool.model_path))])
+
+        num_model = len(self.model_list)
+        self.ensemble_linear = nn.Linear(num_model * 6, 6)
+
+    def forward(self, x):
+        
+        outs = []
+        with torch.no_grad():
+            for model in self.model_list:
+                out = model(x)
+                outs.append(out)
+        
+        outs = torch.stack(outs)
+        outs = outs.permute(1,0,2)
+        
+        if self.ensemble_type == 'mean':
+            ensembled = torch.mean(outs, dim=1)
+        elif self.ensemble_type == 'linear':
+            outs = torch.flatten(outs, 1)
+            ensembled = self.ensemble_linear(outs)
+        ensembled = F.softmax(ensembled, dim=1) 
+        return ensembled
+        
 class Conv_Flatten(nn.Module):
     
     def __init__(self, cfg=Config({"in_channel":20, "hidden_channel":32,"out_channel":6,
@@ -32,10 +66,8 @@ class Conv_Flatten(nn.Module):
                                    "sequence_length":10000})):  
         
         super().__init__()
-        
         padding = int((cfg.kernel_size - 1) // 2)
-        
-        
+
         self.lstm1 = nn.LSTM(cfg.in_channel, cfg.hidden_channel, batch_first=True, 
                              bidirectional=cfg.bidirectional)
 
@@ -49,13 +81,13 @@ class Conv_Flatten(nn.Module):
             linear_input_size = linear_input_size * 2
         
         self.last_linear = nn.Sequential(OrderedDict([
-            ('linear7', nn.Linear(linear_input_size, cfg.hidden_channel * 32)),
-            ('linear6', nn.Linear(cfg.hidden_channel * 32, cfg.hidden_channel * 16)),
-            ('linear5', nn.Linear(cfg.hidden_channel * 16, cfg.hidden_channel * 8)),
-            ('linear4', nn.Linear(cfg.hidden_channel * 8, cfg.hidden_channel * 4)),
-            ('linear3', nn.Linear(cfg.hidden_channel * 4, cfg.hidden_channel*2)),
-            ('linear2', nn.Linear(cfg.hidden_channel * 2, cfg.hidden_channel)),
-            ('linear1', nn.Linear(cfg.hidden_channel, cfg.out_channel)),
+            ('linear4', nn.Linear(linear_input_size, cfg.hidden_channel * 32)),
+            ('activate4', nn.LeakyReLU()),
+            ('linear3', nn.Linear(cfg.hidden_channel * 32, cfg.hidden_channel * 8)),
+            ('activate3', nn.LeakyReLU()),
+            ('linear2', nn.Linear(cfg.hidden_channel * 8, cfg.hidden_channel * 2)),
+            ('activate2', nn.LeakyReLU()),
+            ('linear1', nn.Linear(cfg.hidden_channel * 2, cfg.out_channel)),
         ]))
         
     def forward(self, x):
@@ -66,7 +98,7 @@ class Conv_Flatten(nn.Module):
         out = self.conv_layer(out)
         out = out.permute(0,2,1)
         out, _ = self.lstm2(out)
-        out = torch.flatten(out, 1)
+        out = torch.flatten(out, 1).squeeze()
         out = self.last_linear(out)
         out = F.softmax(out, dim=1)
         
@@ -87,15 +119,14 @@ class Conv_Pool(nn.Module):
         
         self.lstm2 = nn.LSTM(cfg.hidden_channel * 32, cfg.hidden_channel * 32,
                              batch_first=True, bidirectional=cfg.bidirectional)
-        
         self.last_linear = nn.Sequential(OrderedDict([
-            ('linear7', nn.Linear(cfg.hidden_channel * 64, cfg.hidden_channel * 32)),
-            ('linear6', nn.Linear(cfg.hidden_channel * 32, cfg.hidden_channel * 16)),
-            ('linear5', nn.Linear(cfg.hidden_channel * 16, cfg.hidden_channel * 8)),
-            ('linear4', nn.Linear(cfg.hidden_channel * 8, cfg.hidden_channel * 4)),
-            ('linear3', nn.Linear(cfg.hidden_channel * 4, cfg.hidden_channel*2)),
-            ('linear2', nn.Linear(cfg.hidden_channel * 2, cfg.hidden_channel)),
-            ('linear1', nn.Linear(cfg.hidden_channel, cfg.out_channel)),
+            ('linear4', nn.Linear(cfg.hidden_channel * 64, cfg.hidden_channel * 32)),
+            ('activate4', nn.LeakyReLU()),
+            ('linear3', nn.Linear(cfg.hidden_channel * 32, cfg.hidden_channel * 8)),
+            ('activate3', nn.LeakyReLU()),
+            ('linear2', nn.Linear(cfg.hidden_channel * 8, cfg.hidden_channel * 2)),
+            ('activate2', nn.LeakyReLU()),
+            ('linear1', nn.Linear(cfg.hidden_channel * 2, cfg.out_channel)),
         ]))
         
     def forward(self, x):
@@ -108,7 +139,7 @@ class Conv_Pool(nn.Module):
         out = out.permute(0,2,1)
         out = F.avg_pool1d(out, out.shape[-1]).squeeze()
         out = self.last_linear(out)
-        out = F.softmax(out, dim=0)
+        out = F.softmax(out, dim=1)
         
         return out
     
@@ -168,9 +199,59 @@ class EEG_Split_Conv(nn.Module):
         out = F.softmax(out, dim=0)
         return out
     
-if __name__ == "__main__":
+class Wavelet_Conv(nn.Module):
     
+    def __init__(self, cfg=Config({"in_channel":20, "hidden_channel":32,"out_channel":6,
+                                   "kernel_size":5, "pool":[4,4,5,5],"bidirectional":True,
+                                   "sequence_length":10000})):  
+        
+        super().__init__()
+        padding = int((cfg.kernel_size - 1) // 2)
+
+        self.lstm1 = nn.LSTM(cfg.in_channel, cfg.hidden_channel, batch_first=True, 
+                             bidirectional=cfg.bidirectional)
+
+        self.conv_layer = Expansion(in_channel=cfg.hidden_channel*2, kernel_size=5, pool=cfg.pool)
+        
+        self.lstm2 = nn.LSTM(cfg.hidden_channel * 32, cfg.hidden_channel * 32,
+                             batch_first=True, bidirectional=cfg.bidirectional)
+        
+        linear_input_size = cfg.hidden_channel * 32 * int(cfg.sequence_length/math.prod(cfg.pool))
+        if cfg.bidirectional == True:
+            linear_input_size = linear_input_size * 2
+        
+        self.last_linear = nn.Sequential(OrderedDict([
+            ('linear4', nn.Linear(linear_input_size, cfg.hidden_channel * 32)),
+            ('activate4', nn.LeakyReLU()),
+            ('linear3', nn.Linear(cfg.hidden_channel * 32, cfg.hidden_channel * 8)),
+            ('activate3', nn.LeakyReLU()),
+            ('linear2', nn.Linear(cfg.hidden_channel * 8, cfg.hidden_channel * 2)),
+            ('activate2', nn.LeakyReLU()),
+            ('linear1', nn.Linear(cfg.hidden_channel * 2, cfg.out_channel)),
+        ]))
+        
+    def forward(self, x):
+        x = x.permute(0,2,1)
+        out, _ = self.lstm1(x)
+        out = out.permute(0,2,1)
+        
+        out = self.conv_layer(out)
+        out = out.permute(0,2,1)
+        out, _ = self.lstm2(out)
+        out = torch.flatten(out, 1)
+        out = self.last_linear(out)
+        out = F.softmax(out, dim=1)
+        
+        return out
+    
+@hydra.main(version_base=None, config_path="../conf", config_name="config")
+def main(cfg : DictConfig):
+    print(cfg)
     x = torch.rand(32,20,10000)
-    model = Conv_Flatten()
+    model = Conv_Pool(cfg.model)
     out = model(x)
     print(out.shape)
+    print(torch.sum(out, dim=1))
+     
+if __name__ == "__main__":
+    main()
