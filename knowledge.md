@@ -4,5 +4,11 @@
   
   Seizure detectionにはSTFTやパワースペクトル密度などの計算特徴量よりも波形データの方が適している
 
+NonOverlap > 通常EEG
+Consensus > Vote
+最終層　Pool = Flatten
+LSTM意味なし
+
+
 ### gitのあれこれ
 - Git fetchとpullの違い(https://qiita.com/shun_173/items/5fd10135069ee45233fd)
