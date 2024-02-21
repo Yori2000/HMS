@@ -158,7 +158,8 @@ class NonOverlapEEG(Dataset):
                     "Pz", "Fp2", "F4", "C4", "P4", "F8", "T4", "T6", "O2", "EKG"]
         
         eegs = np.nan_to_num(eeg[eeg_list][eeg_offset_frame:eeg_end_frame].to_numpy())
-        eegs = torch.stack(eegs)
+        eegs = np.transpose(eegs)
+        eegs = torch.from_numpy(eegs)
 
         idtfy_idx = {"Seizure":0, "LPD":1, "GPD": 2, "LRDA": 3, "GRDA": 4, "Other":5}
         expert_consensus = torch.tensor(idtfy_idx[expert_consensus])
@@ -269,7 +270,7 @@ def collate_fn(batch):
 @hydra.main(version_base=None, config_path="../conf", config_name="config")
 def main(cfg : DictConfig):
     
-    trainset = EEG(cfg.dir.input, cfg.dataset)
+    trainset = NonOverlapEEG(cfg.dir.input, cfg.dataset)
     trainloader  = torch.utils.data.DataLoader(trainset, batch_size=8, shuffle=True,collate_fn=collate_fn)
 
     for i, b in enumerate(trainloader):
