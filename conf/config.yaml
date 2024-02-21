@@ -1,20 +1,20 @@
 exp_name   : Test
 device     : cuda
 debug      : False
+analysis   : True
 
 defaults:
   - _self_
-  - model: LSTM_Pool
-
-dataset : EEGDataset
+  - model: Conv_Pool
+  - dataset : EEG
 
 dir:
-  input        : ./data
+  input        : /work/abelab4/k_hiro/study/HMS/data
 
 train:
-  batch_size  : 16
+  batch_size  : 32
   epochs      : 500
-  test_size   : 0.1
+  test_size   : 0.2
 
 optim:
   learning_rate: 0.001
@@ -26,5 +26,5 @@ lr_scheduler:
 
 step:
   log   : 50
-  save  : 5000
+  save  : 10000
   valid : 250

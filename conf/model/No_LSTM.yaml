@@ -1,0 +1,21 @@
+model_name : No_LSTM
+
+#shape config
+in_channel      : 20
+hidden_channel  : 32
+out_channel     : 6
+
+#conv config
+kernel_size: 
+  - 5
+  - 5
+  - 5
+  - 5
+  - 5
+pool :
+  - 2
+  - 2
+  - 4
+  - 5
+  - 5
+alpha : 2

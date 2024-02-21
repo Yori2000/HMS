@@ -26,10 +26,9 @@ def main(cfg : DictConfig):
     
     logger.info("train start")
     logger.info("---------------------------------------------------------------------------\n")
-    OmegaConf.save(cfg, Path(cfg.dir.config)/"params.yaml")
     
     # define dataset / dataloader -------------------------------------------------------------------
-    dataset, collate_fn         = get_dataset(cfg)
+    dataset, collate_fn         = get_dataset(cfg.dir.input, cfg.dataset)
     train_index, valid_index    = train_test_split(range(len(dataset)),
                                                 test_size=cfg.train.test_size,random_state=0)
     trainset                    = Subset(dataset, train_index)
@@ -58,8 +57,12 @@ def main(cfg : DictConfig):
 
 def train(cfg, logger, model, loss_fn, optimizer, scheduler, trainloader, validloader, device):  
     # prepare for train---------------------------------------------------------------
-    wandb.init(project="HMS", name=cfg.exp_name,config=dict(cfg))
-    wandb.watch(model)
+    if cfg.analysis:
+        wandb.init(project="HMS", name=cfg.exp_name,config={k: v for k, v in cfg.items() if k!='dir'})
+        wandb.watch(model)
+    if cfg.debug:
+        logger.info("DEBUG")
+        torch.autograd.set_detect_anomaly(True)
     model.train()
     total_step      = int(len(trainloader) * cfg.train.epochs)    
     current_step    = 1
@@ -71,12 +74,15 @@ def train(cfg, logger, model, loss_fn, optimizer, scheduler, trainloader, validl
             start = time.perf_counter()
             
             # calculate prediction----------------------------------------------
-            eeg         = batch[0].to(device)
-            consensus   = batch[1].to(device)
-            vote        = batch[2].to(device)
-
-            out         = model(eeg)
-            loss        = loss_fn(out, vote)
+            x           = batch[0].to(device)
+            target      = batch[1].to(device)
+            
+            out         = model(x)
+            loss        = loss_fn(out, target)
+            
+            logger.debug("out : {}".format(out.detach()))
+            logger.debug("Is out include NaN : {}".format(torch.isnan(out)))
+            logger.debug("Is loss include NaN : {}".format(torch.isnan(loss)))
             
             # optimeze model------------------------------------------------------------
             optimizer.zero_grad()
@@ -91,7 +97,8 @@ def train(cfg, logger, model, loss_fn, optimizer, scheduler, trainloader, validl
                                  (total_step - current_step)*np.mean(times))
                 logger.info(msg)
                 
-                wandb.log({"train_loss": loss.item(), "learning_rate":current_lr}, step=current_step)
+                if cfg.analysis:
+                    wandb.log({"train_loss": loss.item(), "learning_rate":current_lr}, step=current_step)
             
             # save model -----------------------------------------------------  
             if current_step % cfg.step.save == 0:
@@ -105,22 +112,22 @@ def train(cfg, logger, model, loss_fn, optimizer, scheduler, trainloader, validl
                     counter = 0
                     valid_loss  = np.array([])
                     for b in validloader:
-                        eeg         = b[0].to(device)
-                        consensus   = b[1].to(device)
-                        vote        = b[2].to(device)
+                        x           = b[0].to(device)
+                        target      = b[1].to(device)
 
-                        out         = model(eeg)
-                        loss        = loss_fn(out, vote)
+                        out         = model(x)
+                        loss        = loss_fn(out, target)
                         valid_loss = np.append(valid_loss, loss.clone().to('cpu').detach().numpy())
-                        acc_table.add(out, consensus)
+                        acc_table.add(out, torch.argmax(target, dim=1))
                         
                     loss = np.mean(valid_loss)
                     msg = "Valid\tEpoch : {}, Step : {}, valid Loss : {}"\
                             .format(epoch, current_step, loss)
                     logger.info(msg)
-            
-                    acc_table.log_wandb(current_step)
-                    wandb.log({"valid loss":loss}, step=current_step)
+
+                    if cfg.analysis:
+                        acc_table.log_wandb(current_step)
+                        wandb.log({"valid loss":loss}, step=current_step)
             # batch end---------------------------------------------------------------        
             end             = time.perf_counter()
             times = np.append(times, end - start)
@@ -130,7 +137,9 @@ def train(cfg, logger, model, loss_fn, optimizer, scheduler, trainloader, validl
         scheduler.step()
         logger.info("epoch {} end".format(epoch))
         logger.info("---------------------------------------------------------------------------\n")
-    wandb.finish()
+        
+    if cfg.analysis:
+        wandb.finish()
         
 if __name__ == "__main__":
     main()

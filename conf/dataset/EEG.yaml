@@ -1,0 +1,7 @@
+dataset_name : EEG
+
+target : consensus
+idealized : False
+idealized_threshould : 0.75
+shuffle_length : True
+include_Other : False

@@ -5,11 +5,12 @@ import torch.nn.functional as F
 class KLDivLoss(nn.Module):
     def __init__(self):
         super().__init__()
-        self.loss_vote      = nn.KLDivLoss(reduction='batchmean')
+        self.loss_fn      = nn.KLDivLoss(reduction='batchmean')
         
-    def forward(self, y, vote_target):
+    def forward(self, y, target):
         
+        target = target.to(torch.float64)
         y = torch.log(y + 1e-12)
-        vote_loss           = self.loss_vote(y, vote_target)
+        loss           = self.loss_fn(y, target)
         
-        return vote_loss
+        return loss

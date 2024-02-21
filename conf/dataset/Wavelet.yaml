@@ -1,0 +1,6 @@
+dataset_name : Wavelet
+
+target : "consensus"
+idealized : False
+idealized_threshould : 0.75
+num_bin : 30

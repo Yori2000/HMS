@@ -5,25 +5,78 @@ import torch.nn.functional as F
 from collections import OrderedDict
 
 class Expansion(nn.Module):
-    def __init__(self, in_channel, kernel_size=5, pool=[4,4,5,5]):  
+    def __init__(self, in_channel, kernel_size, pool, alpha):  
         super().__init__()
         
-        padding = int((kernel_size - 1) // 2)
+        padding = [int((k - 1) // 2) for k in kernel_size]
         
         self.conv_list = nn.ModuleList(
             [nn.Sequential(OrderedDict([
-            ('conv',       nn.Conv1d(in_channel*(2**i), in_channel*(2**(i+1)), 
-                                      kernel_size=kernel_size, padding=padding)),
-            ('batch_norm', nn.BatchNorm1d(in_channel*(2**(i+1)))),
+            ('conv',       nn.Conv1d(in_channel*int(alpha**i), in_channel*int(alpha**(i+1)), 
+                                      kernel_size=k, padding=pad)),
+            ('batch_norm', nn.BatchNorm1d(in_channel*int(alpha**(i+1)))),
             ('relu',       nn.LeakyReLU()),
-            ('pooling',    nn.AvgPool1d(p))
-            ])) for i, p in enumerate(pool)])
+            ('pooling',    nn.AvgPool1d(pool))
+            ])) for i, (k,pad, pool) in enumerate(zip(kernel_size, padding, pool))])
 
         
     def forward(self, x):
         for layer in self.conv_list:
             x = layer(x)
         return x
+
+class Expansion_2d(nn.Module):
+    def __init__(self, in_feature, in_channel, kernel_size=[5,5,5,5,5],
+                 pool_channel=[4,4,5,5,5], alpha=2):  
+        super().__init__()
+        
+        padding = [int((k - 1) // 2) for k in kernel_size]
+        
+        expand_layer1 = nn.ModuleList(
+            [nn.Sequential(OrderedDict([
+            ('conv',       nn.Conv1d(in_channel*int(alpha**i), in_channel*int(alpha**(i+1)), 
+                                      kernel_size=k, padding=pad)),
+            ('batch_norm', nn.BatchNorm1d(in_channel*int(alpha**(i+1)))),
+            ('relu',       nn.LeakyReLU()),
+            ('pooling',    nn.AvgPool1d(pool))
+            ])) for i, (k,pad, pool) in enumerate(zip(kernel_size, padding, pool_channel))])
+        
+        self.expand_bin = nn.ModuleList([expand_layer1 for i in range(in_feature)])
+        
+        
+    def forward(self, x):
+        B, L, M, N = x.shape
+
+        outs = []
+        for i, layer in enumerate(self.expand_bin):
+            _out = x[:,i].permute(0,2,1)
+            for j, elem in enumerate(layer):
+                _out = elem(_out)
+            _out = F.avg_pool1d(_out, _out.shape[-1]).squeeze()
+            outs.append(_out)
+        
+        out = torch.stack(outs).permute(1,0,2)
+        return out
+
+class Attention1d(nn.Module):
+    def __init__(self, kernel_size=[5,5]):
+        super.__init__()
+        padding = int((kernel_size - 1) // 2)
+        self.conv1 = nn.Conv1d(1,1,kernel_size=kernel_size[0], padding=padding[0])
+        self.relu  = nn.LeakyReLU()
+        self.conv2 = nn.Conv1d(1,1,kernel_size=kernel_size[1], padding=padding[1])
+        
+    def forward(self, x):
+        pass
+
+class Waveform_Attention(nn.Module):
+    def __init__(self, in_channel):
+        super.__init__()
+        self.attentions = nn.ModuleList([
+            Attention1d() for i in range(in_channel)
+        ])
+    def forward(self, x):
+        pass
     
 class ResBlock(nn.Module):
     def __init__(self):
@@ -68,3 +121,10 @@ class ConvLSTM(nn.Module):
         out = out.permute(0,2,1)
         out, _ = self.lstm(out)
         return out
+    
+#TEST
+if __name__ == "__main__":
+    x = torch.rand(32,20,10000,30)
+    model = Expansion_2d(in_feature=20, in_channel=30)
+    y = model(x)
+    print(y.shape)

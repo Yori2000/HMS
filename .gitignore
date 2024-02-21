@@ -8,3 +8,4 @@ checkpoint/*
 outputs/*
 product/*
 wandb/*
+exp/*

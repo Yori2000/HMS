@@ -1,0 +1,21 @@
+model_name : Wavelet_Conv
+
+#shape config
+in_channel      : 20
+num_bin         : 30
+out_channel     : 6
+
+#conv config
+kernel_size     : 
+  - 5
+  - 5
+  - 5
+  - 5
+  - 5
+pool_channel :
+  - 4
+  - 4
+  - 5
+  - 5
+  - 5
+alpha : 2
