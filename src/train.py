@@ -58,7 +58,7 @@ def main(cfg : DictConfig):
 def train(cfg, logger, model, loss_fn, optimizer, scheduler, trainloader, validloader, device):  
     # prepare for train---------------------------------------------------------------
     if cfg.analysis:
-        wandb.init(project="HMS", name=cfg.exp_name,config={k: v for k, v in cfg.items() if k!='dir'})
+        wandb.init(project="HMS2", name=cfg.exp_name,config={k: v for k, v in cfg.items() if k!='dir'})
         wandb.watch(model)
     if cfg.debug:
         logger.info("DEBUG")

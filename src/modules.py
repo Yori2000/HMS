@@ -60,27 +60,43 @@ class Expansion_2d(nn.Module):
 
 class Attention1d(nn.Module):
     def __init__(self, kernel_size=[5,5]):
-        super.__init__()
-        padding = int((kernel_size - 1) // 2)
-        self.conv1 = nn.Conv1d(1,1,kernel_size=kernel_size[0], padding=padding[0])
-        self.relu  = nn.LeakyReLU()
-        self.conv2 = nn.Conv1d(1,1,kernel_size=kernel_size[1], padding=padding[1])
+        super().__init__()
+        padding = [int((k - 1) // 2) for k in kernel_size]
+        self.attention = nn.Sequential(OrderedDict([
+            ('conv1', nn.Conv1d(1,1,kernel_size=kernel_size[0], padding=padding[0])),
+            ('relu',  nn.LeakyReLU()),
+            ('conv2', nn.Conv1d(1,1,kernel_size=kernel_size[1], padding=padding[1]))]))
         
     def forward(self, x):
-        pass
+        attention = self.attention(x)
+        attention -= attention.min(1, keepdim=True)[0]
+        attention /= attention.max(1, keepdim=True)[0]
+        
+        out = x * attention
+        return out
 
 class Waveform_Attention(nn.Module):
-    def __init__(self, in_channel):
-        super.__init__()
+    def __init__(self, in_channel, kernel_size=[5,5]):
+        super().__init__()
         self.attentions = nn.ModuleList([
-            Attention1d() for i in range(in_channel)
+            Attention1d(kernel_size=kernel_size) for i in range(in_channel)
         ])
     def forward(self, x):
-        pass
+        B, L, M = x.shape
+        x = x.permute(1,0,2)
+        outs = []
+        for eeg, layer in zip(x, self.attentions):
+            eeg = eeg.unsqueeze(1)
+            out = layer(eeg)
+            out = out.squeeze(1)
+            outs.append(out)
+        outs = torch.stack(outs)
+        outs = outs.permute(1,0,2)
+        return outs
     
 class ResBlock(nn.Module):
     def __init__(self):
-        super.__init__()
+        super().__init__()
     def forward(self):
         pass
 
@@ -124,7 +140,7 @@ class ConvLSTM(nn.Module):
     
 #TEST
 if __name__ == "__main__":
-    x = torch.rand(32,20,10000,30)
-    model = Expansion_2d(in_feature=20, in_channel=30)
+    x = torch.rand(32,20,10000)
+    model = Waveform_Attention(in_channel=20)
     y = model(x)
     print(y.shape)

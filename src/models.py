@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
-from modules import ConvLSTM, Expansion, Expansion_2d
+from modules import ConvLSTM, Expansion, Expansion_2d, Waveform_Attention
 from utils import Config
 
 import hydra
@@ -28,6 +28,8 @@ def get_model(cfg):
         return Wavelet_Conv(cfg)
     elif cfg.model_name == 'No_LSTM':
         return No_LSTM(cfg)
+    elif cfg.model_name == 'EEG_Attention':
+        return EEG_Attention(cfg)
     elif cfg.model_name == 'Ensemble':
         return Ensemble(cfg)
 
@@ -177,6 +179,42 @@ class No_LSTM(nn.Module):
         out = F.softmax(out, dim=1)
         
         return out
+
+class EEG_Attention(nn.Module):
+    
+    def __init__(self, cfg=Config({"in_channel":20, "hidden_channel":32,"out_channel":6,
+                                   "kernel_size":[5,5,5,5,5], "pool":[2,2,4,5,5], "alpha":2,
+                                   "attention_kernel_size":[5,5]})):  
+        
+        super().__init__()
+        
+        padding = int((cfg.kernel_size[0] - 1) // 2)
+        
+        self.attention = Waveform_Attention(cfg.in_channel, cfg.attention_kernel_size)
+        self.first_conv = nn.Conv1d(cfg.in_channel, cfg.hidden_channel, 
+                                    kernel_size=cfg.kernel_size[0], padding=padding)
+        
+        self.conv_layer = Expansion(in_channel=cfg.hidden_channel, kernel_size=cfg.kernel_size, pool=cfg.pool, alpha=cfg.alpha)
+        expand_size = int(cfg.hidden_channel * (cfg.alpha**len(cfg.pool)))
+        self.last_linear = nn.Sequential(OrderedDict([
+            ('linear4', nn.Linear(expand_size, expand_size // 2)),
+            ('activate4', nn.LeakyReLU()),
+            ('linear3', nn.Linear(expand_size // 2, expand_size // 4)),
+            ('activate3', nn.LeakyReLU()),
+            ('linear2', nn.Linear(expand_size // 4, expand_size // 8)),
+            ('activate2', nn.LeakyReLU()),
+            ('linear1', nn.Linear(expand_size // 8, cfg.out_channel)),
+        ]))
+        
+    def forward(self, x):
+        out = self.attention(x)
+        out = self.first_conv(x)
+        out = self.conv_layer(out)
+        out = F.avg_pool1d(out, out.shape[-1]).squeeze()
+        out = self.last_linear(out)
+        out = F.softmax(out, dim=1)
+        
+        return out
     
 class EEG_Split_Conv(nn.Module):
     def __init__(self, cfg=Config({"in_channels":[5,5,5,5,4], "hidden_channel":8,"out_channel":6,
@@ -268,8 +306,8 @@ class Wavelet_Conv(nn.Module):
     
 @hydra.main(version_base=None, config_path="../conf", config_name="config")
 def main(cfg : DictConfig):
-    x = torch.rand(32,20,10000, 30)
-    model = Wavelet_Conv()
+    x = torch.rand(32,20,10000)
+    model = EEG_Attention()
     out = model(x)
     print(out.shape)
      
