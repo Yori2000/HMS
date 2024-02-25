@@ -37,7 +37,9 @@ for path in [Paths.OUTPUT_DIR, Paths.TRAIN_SPECTOGRAMS, Paths.TRAIN_EEGS,
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
 
+# 学習データの選択＋特徴量エンジニアリング
 def feature_engineering(df, label_cols):
+    # 
     tmp_df = df.group_by('eeg_id').agg(
         spectrogram_id=('spectrogram_id'),
         sp_label_seconds=('spectrogram_label_offset_seconds')
@@ -65,7 +67,7 @@ def feature_engineering(df, label_cols):
 
     return train_df
 
-
+# 通常の1エポックの学習
 def train_epoch(train_loader, model, criterion, optimizer, epoch, scheduler, device):
     """One epoch training pass."""
     model.train() 
@@ -114,6 +116,7 @@ def train_epoch(train_loader, model, criterion, optimizer, epoch, scheduler, dev
     return losses.avg
 
 
+# Mixupを使った1エポックの学習
 def train_epoch_mixup(train_loader, model, criterion, optimizer, epoch, scheduler, device, mixup_alpha=0.4):
     """One epoch training pass."""
     model.train() 
@@ -128,6 +131,8 @@ def train_epoch_mixup(train_loader, model, criterion, optimizer, epoch, schedule
         for step, (X, y) in enumerate(tqdm_train_loader):
             X = X.to(device)
             y = y.to(device)
+            
+            # ========== MIXUP ==========
             lmd = np.random.beta(mixup_alpha, mixup_alpha)
             perm = torch.randperm(X.size(0)).to(device)
             X2 = X[perm, :]
@@ -137,6 +142,7 @@ def train_epoch_mixup(train_loader, model, criterion, optimizer, epoch, schedule
             with torch.cuda.amp.autocast(enabled=Config.AMP):
                 y_preds = model(X_mixup) 
                 loss = lmd * criterion(F.log_softmax(y_preds, dim=1), y) + (1 - lmd) * criterion(F.log_softmax(y_preds, dim=1), y2)
+            
             if Config.GRADIENT_ACCUMULATION_STEPS > 1:
                 loss = loss / Config.GRADIENT_ACCUMULATION_STEPS
             losses.update(loss.item(), batch_size)
@@ -202,18 +208,20 @@ def valid_epoch(valid_loader, model, criterion, device):
     return losses.avg, prediction_dict
 
 
+# 2段階の学習を採用．2段階目のvalidデータは1段階目のvalidデータと同じものを使うことに注意．
+# (2段階目でfilterdされたvalidデータを使うと，1段階目のvalidデータと2段階目のvalidデータの分布が異なり不当に良い結果が出るため．)
+# 2段階目の学習データは1段階目の学習データのうちkl < 5.5のものを使うが，これは変更の余地あり．
+# MIXUPに関する設定はconfig.pyで行う．
 def train_loop(df, fold, LOGGER, target_preds, specs, eegs, debag=False):
     
     LOGGER.info(f"========== Fold: {fold} training ==========")
 
     # ======== SPLIT ==========
-    # train_folds = df[df['fold'] != fold].reset_index(drop=True)
-    # valid_folds = df[df['fold'] == fold].reset_index(drop=True)
     train_folds = df.filter(pl.col('fold') != fold)
     valid_folds = df.filter(pl.col('fold') == fold)
     
     train_folds2 = train_folds.filter(pl.col('kl') < 5.5)
-    valid_folds2 = valid_folds.filter(pl.col('kl') < 5.5)
+    valid_folds2 = valid_folds.filter(pl.col('kl') < 5.5)       # このデータは使わない．注意のために残しておく．
     
     
     # ======== DATASETS ==========
@@ -221,7 +229,7 @@ def train_loop(df, fold, LOGGER, target_preds, specs, eegs, debag=False):
     valid_dataset = CustomDataset(valid_folds, Config, mode="train", augment=False, specs=specs, eeg_specs=eegs)
     
     train_dataset2 = CustomDataset(train_folds2, Config, mode="train", augment=True, specs=specs, eeg_specs=eegs, debag=debag)
-    valid_dataset2 = CustomDataset(valid_folds2, Config, mode="train", augment=False, specs=specs, eeg_specs=eegs)
+    # valid_dataset2 = CustomDataset(valid_folds2, Config, mode="train", augment=False, specs=specs, eeg_specs=eegs)
     
     # ======== DATALOADERS ==========
     train_loader = DataLoader(train_dataset,
@@ -242,11 +250,12 @@ def train_loop(df, fold, LOGGER, target_preds, specs, eegs, debag=False):
                                 shuffle=False,
                                 num_workers=Config.NUM_WORKERS, pin_memory=True, drop_last=False)
     
-    # ======== MODEL ==========
+    # =============== SET MODEL & OPTIMIZER & SCHEDULER ==========
     model = CustomModel(Config)
     model.to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.1, weight_decay=Config.WEIGHT_DECAY)
+    
     scheduler = OneCycleLR(
         optimizer,
         max_lr=1e-3,
@@ -325,7 +334,7 @@ def train_loop(df, fold, LOGGER, target_preds, specs, eegs, debag=False):
     
     return valid_folds
 
-
+# one-foldでの学習用．未実装．
 def train_loop_full_data(df, LOGGER, target_preds):
     train_dataset = CustomDataset(df, Config, mode="train", augment=True)
     train_loader = DataLoader(train_dataset,
@@ -370,6 +379,9 @@ def get_result(oof_df, label_cols, target_preds):
     return result
 
 
+# 5-fold cross validationを行い，5つのモデルの予測を平均して提出する．
+# 各モデルは異なるデータで学習するため，アンサンブルすることで精度が向上する．
+# また5個のモデルの精度をもとにCVを計算するため，より正確な評価が可能となる．
 def main():
     df = pl.read_csv(Paths.TRAIN_CSV)
     label_cols = df.columns[-6:]
@@ -429,55 +441,10 @@ def main():
         # fold_column = is_train.then(fold)
         fold_column += is_valid.map_elements(lambda x: fold if x else 0)
     fold_column = fold_column.alias('fold')
-    # polarsDataFrameにfold列を追加
+    # polarsDataFrameにfold列を追加．fold列をもとに5-fold cross validationを行う．
     train_df = train_df.with_columns(fold_column)
     # print(f"{train_df.group_by('fold').agg(fold_count=pl.count('eeg_id'))=}")
     # print(f"{train_df.sort('eeg_id')=}")
-
-    # train_dataset = CustomDataset(
-    #     df=train_df,
-    #     config=Config,
-    #     augment=True,
-    #     mode='train',
-    #     specs=specs,
-    #     eeg_specs=eegs
-    #     )
-    # train_loader = DataLoader(
-    #     train_dataset,
-    #     batch_size=Config.BATCH_SIZE_TRAIN,
-    #     shuffle=True,
-    #     num_workers=Config.NUM_WORKERS,
-    #     pin_memory=True,
-    #     drop_last=True
-    #     )
-    # X, y = train_dataset[0]
-    # print(f"{X.shape=}, {y.shape=}")
-    
-    # if Config.VISUALIZE:
-    #     ROWS = 2
-    #     COLS = 3
-    #     for (X, y) in train_loader:
-    #         plt.figure(figsize=(20,8))
-    #         for row in range(ROWS):
-    #             for col in range(COLS):
-    #                 plt.subplot(ROWS, COLS, row*COLS + col+1)
-    #                 t = y[row*COLS + col]
-    #                 img = X[row*COLS + col, :, :, 0]
-    #                 mn = img.flatten().min()
-    #                 mx = img.flatten().max()
-    #                 img = (img-mn)/(mx-mn)
-    #                 plt.imshow(img)
-    #                 tars = f'[{t[0]:0.2f}'
-    #                 for s in t[1:]:
-    #                     tars += f', {s:0.2f}'
-    #                 eeg = train_df['eeg_id'].to_numpy()[row*Config.BATCH_SIZE_TRAIN + row*COLS + col]
-    #                 plt.title(f'EEG = {eeg}\nTarget = {tars}',size=12)
-    #                 plt.yticks([])
-    #                 plt.ylabel('Frequencies (Hz)',size=14)
-    #                 plt.xlabel('Time (sec)',size=16)
-    #         # plt.show()
-    #         plt.savefig(os.path.join(Paths.OUTPUT_DIR, 'train_loader.png'))
-    #         break
     
     LOGGER = get_logger()
     target_preds = [x + "_pred" for x in ['seizure_vote', 'lpd_vote', 'gpd_vote', 'lrda_vote', 'grda_vote', 'other_vote']]
