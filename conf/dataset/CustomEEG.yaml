@@ -1,0 +1,5 @@
+dataset_name : CustomEEG
+
+target : "consensus"
+idealized : False
+idealized_threshould : 0.75

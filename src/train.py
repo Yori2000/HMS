@@ -78,11 +78,8 @@ def train(cfg, logger, model, loss_fn, optimizer, scheduler, trainloader, validl
             target      = batch[1].to(device)
             
             out         = model(x)
+            logger.debug("x : {}, target : {}, out : {}".format(x.shape, target.shape, out.shape))
             loss        = loss_fn(out, target)
-            
-            logger.debug("out : {}".format(out.detach()))
-            logger.debug("Is out include NaN : {}".format(torch.isnan(out)))
-            logger.debug("Is loss include NaN : {}".format(torch.isnan(loss)))
             
             # optimeze model------------------------------------------------------------
             optimizer.zero_grad()

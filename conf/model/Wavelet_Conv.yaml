@@ -1,7 +1,7 @@
 model_name : Wavelet_Conv
 
 #shape config
-in_channel      : 20
+in_channel      : 4
 num_bin         : 30
 out_channel     : 6
 
