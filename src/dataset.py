@@ -11,6 +11,7 @@ import numpy as np
 import polars as pl
 from logging import getLogger
 import random
+import time
 random.seed(0)
 
 logger = getLogger('main').getChild('dataset')
@@ -20,8 +21,10 @@ def get_dataset(data_dir, cfg):
         return EEG(data_dir, cfg), collate_fn
     elif cfg.dataset_name == 'NonOverlapEEG':
         return NonOverlapEEG(data_dir, cfg), collate_fn
-    elif cfg.dataset_name == 'Wavelet':
-        return Wavelet(data_dir, cfg), None
+    elif cfg.dataset_name == 'CustomEEG':
+        return CustomEEG(data_dir, cfg), collate_fn
+    elif cfg.dataset_name == 'Scalogram':
+        return Scalogram(data_dir, cfg), collate_fn_2d
 
 class EEG(Dataset):
     def __init__(self, data_dir, cfg=Config({"target":"vote",
@@ -39,14 +42,36 @@ class EEG(Dataset):
     
     def create_df(self, df):
         VOTE = df.columns[-6:]
-        train = df.select('eeg_id', 'eeg_label_offset_seconds','expert_consensus')
+        tmp = df.group_by('eeg_id', maintain_order=True).agg(
+            pl.first('expert_consensus'),
+            pl.min('eeg_label_offset_seconds').alias('min_offset'),
+            pl.max('eeg_label_offset_seconds').alias('max_offset'),
+            pl.first('patient_id'),
+            pl.sum(VOTE))
+        num_vote = tmp.select(VOTE).sum_horizontal()
+        vote_norm = tmp.select(VOTE) / num_vote
+        tmp = tmp.with_columns(vote_norm)
         
-        num_vote = df.select(VOTE).sum_horizontal()
-        vote_norm = df.select(VOTE) / num_vote
-        train = train.with_columns(vote_norm)
+        vote_max = tmp.select(pl.col(VOTE)).max_horizontal().alias("vote_max")
+        tmp = tmp.with_columns(vote_max)
         
-        vote_max = train.select(pl.col(VOTE)).max_horizontal().alias("vote_max")
-        train = train.with_columns(vote_max)
+        train = []
+        for i, d in enumerate(tmp.iter_rows(named=True)):
+            sub_ids = int(d['max_offset'] // 50) + 1
+            for sub_id in range(sub_ids):
+                _d = {'eeg_id' : d['eeg_id'],
+                      'sub_id' : sub_id,
+                      'offset' : sub_id * 50,
+                      'expert_consensus' : d['expert_consensus'],
+                      'vote_max'         : d['vote_max'], 
+                      'seizure_vote' : d['seizure_vote'],
+                      'lpd_vote'     : d['lpd_vote'],
+                      'gpd_vote'     : d['gpd_vote'],
+                      'lrda_vote'    : d['lrda_vote'],
+                      'grda_vote'    : d['grda_vote'],
+                      'other_vote'   : d['other_vote']}
+                train.append(_d)
+        train = pl.DataFrame(train)
 
         if self.idealized:
             train = train.filter(pl.col('vote_max') > 0.75)
@@ -64,7 +89,7 @@ class EEG(Dataset):
         eeg_path  =  self.data_dir / 'train_eegs' / (str(eeg_id) +  '.parquet')
         eeg                      = pl.read_parquet(eeg_path)
         
-        eeg_label_offset_seconds = self.data['eeg_label_offset_seconds'][idx]
+        eeg_offset = self.data['offset'][idx]
         expert_consensus         = self.data['expert_consensus'][idx]
         seizure_vote             = self.data['seizure_vote'][idx]
         lpd_vote                 = self.data['lpd_vote'][idx]
@@ -73,9 +98,8 @@ class EEG(Dataset):
         grda_vote                = self.data['grda_vote'][idx]
         other_vote               = self.data['other_vote'][idx]
 
-        eeg_offset_frame         = int(eeg_label_offset_seconds) * 200
-        num_frame                = random.uniform(30,50) if self.shuffle_length else 50
-        eeg_end_frame            = eeg_offset_frame + int(num_frame * 200)
+        eeg_offset_frame         = int(eeg_offset) * 200
+        eeg_end_frame            = eeg_offset_frame + 50 * 200
         
         eeg_list = ["Fp1", "F3", "C3", "P3", "F7", "T3", "T5", "O1", "Fz", "Cz", 
                     "Pz", "Fp2", "F4", "C4", "P4", "F8", "T4", "T6", "O2", "EKG"]
@@ -171,8 +195,72 @@ class NonOverlapEEG(Dataset):
         elif self.target == "consensus":
             target = expert_consensus
         return eegs, target
+
+class CustomEEG(Dataset):
+    def __init__(self, data_dir, cfg=Config({"target":"consensus",
+                                   "idealized":True, "idealized_threshould":0.75})):
+        self.data_dir = Path(data_dir)
+        self.idealized = cfg.idealized
+        self.target = cfg.target
+        
+        csv = pl.read_csv(self.data_dir / "train.csv")
+        self.data = self.create_df(csv)
+        
+    def create_df(self, df):
+        VOTE = df.columns[-6:]
+        VOTE = df.columns[-6:]
+        tmp = df.group_by('eeg_id', maintain_order=True).agg(
+            pl.first('expert_consensus'),
+            pl.first('patient_id'),
+            pl.sum(VOTE))
+        num_vote = tmp.select(VOTE).sum_horizontal()
+        vote_norm = tmp.select(VOTE) / num_vote
+        tmp = tmp.with_columns(vote_norm)
+        vote_max = tmp.select(pl.col(VOTE)).max_horizontal().alias("vote_max")
+        tmp = tmp.with_columns(vote_max)
+        return tmp
     
-class Wavelet(Dataset):
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        
+        eeg_id = self.data['eeg_id'][idx]
+        eeg_path  =  self.data_dir / 'train_eegs' / (str(eeg_id) +  '.parquet')
+        eeg                      = pl.read_parquet(eeg_path)
+        
+        expert_consensus         = self.data['expert_consensus'][idx]
+        seizure_vote             = self.data['seizure_vote'][idx]
+        lpd_vote                 = self.data['lpd_vote'][idx]
+        gpd_vote                 = self.data['gpd_vote'][idx]
+        lrda_vote                = self.data['lrda_vote'][idx]
+        grda_vote                = self.data['grda_vote'][idx]
+        other_vote               = self.data['other_vote'][idx]
+
+        frame_offset         = int((eeg.shape[0]-10000)//2)
+        frame_end            = frame_offset + 10000
+        eeg_list = ["Fp1", "F3", "C3", "P3", "F7", "T3", "T5", "O1", "Fz", "Cz", 
+                    "Pz", "Fp2", "F4", "C4", "P4", "F8", "T4", "T6", "O2", "EKG"]
+        eegs = np.nan_to_num(eeg[eeg_list][frame_offset:frame_end].to_numpy())
+        eegs = np.transpose(eegs)
+        LL = np.stack([eegs[0]-eegs[4], eegs[4]-eegs[5], eegs[5]-eegs[6], eegs[6]-eegs[7]])
+        LP = np.stack([eegs[0]-eegs[1], eegs[1]-eegs[2], eegs[2]-eegs[3], eegs[3]-eegs[7]])
+        RL = np.stack([eegs[11]-eegs[15], eegs[15]-eegs[16], eegs[16]-eegs[17], eegs[17]-eegs[18]])
+        RP = np.stack([eegs[11]-eegs[12], eegs[12]-eegs[13], eegs[13]-eegs[14], eegs[14]-eegs[18]] )       
+        eegs = torch.from_numpy(np.stack([LL,LP,RL,RP]))
+        
+        idtfy_idx = {"Seizure":0, "LPD":1, "GPD": 2, "LRDA": 3, "GRDA": 4, "Other":5}
+        expert_consensus = torch.tensor(idtfy_idx[expert_consensus])
+        expert_consensus = F.one_hot(expert_consensus, num_classes=6)
+        vote = torch.tensor([seizure_vote, lpd_vote, gpd_vote, lrda_vote, grda_vote, other_vote])
+        
+        if self.target == "vote":
+            target = vote
+        elif self.target == "consensus":
+            target = expert_consensus
+        return eegs, target
+    
+class Scalogram(Dataset):
     def __init__(self, data_dir, cfg=Config({"target":"vote",
                                              "idealized":True, "idealized_threshould":0.75,
                                              "num_bin":30})):
@@ -181,6 +269,7 @@ class Wavelet(Dataset):
         self.idealized = cfg.idealized
         self.idealized_threshould = cfg.idealized_threshould
         self.num_bin = cfg.num_bin
+        
         csv = pl.read_csv(self.data_dir / "train.csv")
         self.data = self.create_df(csv)
     
@@ -206,17 +295,6 @@ class Wavelet(Dataset):
         
         train = train.filter(pl.col('max') < 500)
         return train
-    
-    def scalogram_to_feature(self, parquet):
-        eeg_list = ["Fp1", "F3", "C3", "P3", "F7", "T3", "T5", "O1", "Fz", "Cz", 
-                    "Pz", "Fp2", "F4", "C4", "P4", "F8", "T4", "T6", "O2", "EKG"]
-        scalograms = []
-        for eeg in eeg_list:
-            scalogram = parquet.select(pl.col("^{}_.*$".format(eeg)))
-            scalogram = scalogram.to_numpy()
-            scalograms.append([[scalogram]])
-        scalograms = np.block(scalograms)
-        return scalograms
 
     def __len__(self):
         return len(self.data)
@@ -240,14 +318,20 @@ class Wavelet(Dataset):
 
         frame_start         = int(offset_min) * 200 
         frame_end            = int(offset_max) + 50 * 200
-        
-        eeg_list = ["Fp1", "F3", "C3", "P3", "F7", "T3", "T5", "O1", "Fz", "Cz", 
-                    "Pz", "Fp2", "F4", "C4", "P4", "F8", "T4", "T6", "O2", "EKG"]
 
-        scalograms = self.scalogram_to_feature(scalograms)
-        
+        column = ["LL", "LP", "RL", "RP"]
+        scalo_l = []
+
+        for c in column:
+            _scalo = np.nan_to_num(scalograms.select(pl.col("^{}_.*$".format(c)))[frame_start:frame_end].to_numpy())
+            scalo_l.append(_scalo)
+
+        scalograms = np.stack(scalo_l)
+        scalograms = torch.from_numpy(scalograms).to(torch.float)
+
         idtfy_idx = {"Seizure":0, "LPD":1, "GPD": 2, "LRDA": 3, "GRDA": 4, "Other":5}
         expert_consensus = torch.tensor(idtfy_idx[expert_consensus])
+        expert_consensus = F.one_hot(expert_consensus, num_classes=6)
         vote = torch.tensor([seizure_vote, lpd_vote, gpd_vote, lrda_vote, grda_vote, other_vote])
         
         if self.target == "vote":
@@ -266,13 +350,27 @@ def collate_fn(batch):
     target = torch.stack(target)
     
     return x, target
+
+def collate_fn_2d(batch):
+
+    x = [b[0] for b in batch]
+    target = [b[1] for b in batch]
+    
+    max_length = max([_x.shape[1] for _x in x])
+
+    x = [F.pad(_x, (0, 0, 0, max_length - _x.shape[1]),"constant",0) for _x in x]
+    x = torch.stack(x)
+    target = torch.stack(target)
+    
+    return x, target
+
+
 #TEST          
 @hydra.main(version_base=None, config_path="../conf", config_name="config")
 def main(cfg : DictConfig):
     
-    trainset = NonOverlapEEG(cfg.dir.input, cfg.dataset)
-    trainloader  = torch.utils.data.DataLoader(trainset, batch_size=8, shuffle=True,collate_fn=collate_fn)
-
+    trainset = CustomEEG(cfg.dir.input, cfg.dataset)
+    trainloader  = torch.utils.data.DataLoader(trainset, batch_size=32, shuffle=True,collate_fn=collate_fn)
     for i, b in enumerate(trainloader):
         x, t= b
         print(i, x.shape)
