@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
-from modules import ConvLSTM, Expansion, Expansion_2d, Waveform_Attention
+from modules import Expansion, Expansion_2d, Waveform_Attention
 from utils import Config
 
 import hydra
@@ -22,8 +22,8 @@ def get_model(cfg):
         return Conv_Flatten(cfg)
     elif cfg.model_name == 'Conv_Pool':
         return Conv_Pool(cfg)
-    elif cfg.model_name == 'EEG_Split_Conv':
-        return EEG_Split_Conv(cfg)
+    elif cfg.model_name == 'CustomEEG_Conv':
+        return CustomEEG_Conv(cfg)
     elif cfg.model_name == 'Wavelet_Conv':
         return Wavelet_Conv(cfg)
     elif cfg.model_name == 'No_LSTM':
@@ -60,7 +60,6 @@ class Ensemble(nn.Module):
         elif self.ensemble_type == 'linear':
             outs = torch.flatten(outs, 1)
             ensembled = self.ensemble_linear(outs)
-        ensembled = F.softmax(ensembled, dim=1) 
         return ensembled
         
 class Conv_Flatten(nn.Module):
@@ -105,7 +104,6 @@ class Conv_Flatten(nn.Module):
         out, _ = self.lstm2(out)
         out = torch.flatten(out, 1).squeeze()
         out = self.last_linear(out)
-        out = F.softmax(out, dim=1)
         
         return out
     
@@ -144,7 +142,6 @@ class Conv_Pool(nn.Module):
         out = out.permute(0,2,1)
         out = F.avg_pool1d(out, out.shape[-1]).squeeze()
         out = self.last_linear(out)
-        out = F.softmax(out, dim=1)
         
         return out
     
@@ -176,7 +173,6 @@ class No_LSTM(nn.Module):
         out = self.conv_layer(out)
         out = F.avg_pool1d(out, out.shape[-1]).squeeze()
         out = self.last_linear(out)
-        out = F.softmax(out, dim=1)
         
         return out
 
@@ -212,34 +208,21 @@ class EEG_Attention(nn.Module):
         out = self.conv_layer(out)
         out = F.avg_pool1d(out, out.shape[-1]).squeeze()
         out = self.last_linear(out)
-        out = F.softmax(out, dim=1)
         
         return out
     
-class EEG_Split_Conv(nn.Module):
-    def __init__(self, cfg=Config({"in_channels":[5,5,5,5,4], "hidden_channel":8,"out_channel":6,
-                                   "kernel_size":5, "bidirectional":True})):
+class CustomEEG_Conv(nn.Module):
+    def __init__(self, cfg=Config({"in_channels":[4,4,4,4], "out_channel":6,
+                                   "kernel_size":[5,5,5,5,5], "pool":[2,2,4,5,5], "alpha":2})):
         super().__init__()
         self.n_splits = len(cfg.in_channels)
-        self.LL_index = {"Fp1":0, "F7":4, "T3":5, "T5":6, "O1":7}
-        self.LP_index = {"Fp1":0, "F3":1, "C3":2, "P3":3, "O1":7}
-        self.RL_index = {"Fp2":11, "F8":15, "T4":16, "T6":17, "O2":18}
-        self.RP_index = {"Fp2":11, "F4":12, "C4":13, "P4":14, "O2":18}
-        self.Other_index = {"Fz":8,"Cz":9,"Pz":10,"EKG":19}
         
         self.each_conv = nn.ModuleList([
-            ConvLSTM(input_channel=i, hidden_channel=cfg.hidden_channel,
-                     kernel_size=cfg.kernel_size, bidirectional=cfg.bidirectional)
-            for i in cfg.in_channels
+            Expansion(in_channel, kernel_size=cfg.kernel_size, pool=cfg.pool, alpha=cfg.alpha)
+            for in_channel in cfg.in_channels
         ])
         
-        conv_out_size = cfg.hidden_channel * 8 * 2 * len(cfg.in_channels)
-        self.lstm = nn.LSTM(conv_out_size, conv_out_size,
-                             batch_first=True, bidirectional=cfg.bidirectional)
-        
-        linear_input_size = conv_out_size
-        if cfg.bidirectional:
-            linear_input_size = linear_input_size * 2
+        linear_input_size =  sum([in_channel * cfg.alpha ** len(cfg.pool) for in_channel in cfg.in_channels])
             
         self.last_linear = nn.Sequential(OrderedDict([
             ('linear6', nn.Linear(linear_input_size, linear_input_size//2)),
@@ -252,29 +235,20 @@ class EEG_Split_Conv(nn.Module):
         
         
     def forward(self, x):
-        LL = torch.stack([x[:,v,:] for v in self.LL_index.values()]).permute(1,0,2)
-        LP = torch.stack([x[:,v,:] for v in self.LP_index.values()]).permute(1,0,2)
-        RL = torch.stack([x[:,v,:] for v in self.RL_index.values()]).permute(1,0,2)
-        RP = torch.stack([x[:,v,:] for v in self.RP_index.values()]).permute(1,0,2)
-        Other = torch.stack([x[:,v,:] for v in self.Other_index.values()]).permute(1,0,2)
-        inputs = [LL, LP, RL, RP, Other]
-        
+        x = x.permute(1,0,2,3)
         outs = []
-        for i, _x in enumerate(inputs):
+        for i, _x in enumerate(x):
             _out = self.each_conv[i](_x)
+            _out = F.avg_pool1d(_out, _out.shape[-1]).squeeze()
             outs.append(_out)
-        out = torch.cat((outs[0],outs[1],outs[2],outs[3],outs[4]), dim=2)
-
-        out, _ = self.lstm(out)
-        out = out.permute(0,2,1)
-        out = F.avg_pool1d(out, out.shape[-1]).squeeze()
+        out = torch.stack(outs).permute(1,0,2)
+        out = torch.flatten(out, 1)
         out = self.last_linear(out)
-        out = F.softmax(out, dim=1)
         return out
     
 class Wavelet_Conv(nn.Module):
     
-    def __init__(self, cfg=Config({"in_channel":20, "num_bin":30, "hidden_channel":32,"out_channel":6,
+    def __init__(self, cfg=Config({"in_channel":4, "num_bin":30, "hidden_channel":32,"out_channel":6,
                                    "kernel_size":[5,5,5,5,5], "pool_channel":[4,4,5,5,5], "alpha":2})):  
         
         super().__init__()
@@ -300,14 +274,13 @@ class Wavelet_Conv(nn.Module):
         out = self.expand(x)
         out = torch.flatten(out, 1)
         out = self.last_linear(out)
-        out = F.softmax(out, dim=1)
         
         return out
     
 @hydra.main(version_base=None, config_path="../conf", config_name="config")
 def main(cfg : DictConfig):
-    x = torch.rand(32,20,10000)
-    model = EEG_Attention()
+    x = torch.rand(32,4,4,10000)
+    model = CustomEEG_Conv()
     out = model(x)
     print(out.shape)
      
