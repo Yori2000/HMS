@@ -1,7 +1,6 @@
 dataset_name : EEG
-
+test_size : 0.2
 target : consensus
 idealized : False
 idealized_threshould : 0.75
-shuffle_length : True
-include_Other : False
+exclude_other : False

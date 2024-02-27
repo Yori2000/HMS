@@ -239,7 +239,7 @@ class CustomEEG_Conv(nn.Module):
         outs = []
         for i, _x in enumerate(x):
             _out = self.each_conv[i](_x)
-            _out = F.avg_pool1d(_out, _out.shape[-1]).squeeze()
+            _out = F.avg_pool1d(_out, _out.shape[-1]).squeeze(dim=2)
             outs.append(_out)
         out = torch.stack(outs).permute(1,0,2)
         out = torch.flatten(out, 1)
