@@ -25,13 +25,13 @@ class AccuracyTable:
             ave.append(_ave)
         return ave
     
-    def log_wandb(self, step):
+    def log_wandb(self, fold, step):
         l = ["Seizure","LPD","GPD","LRDA","GRDA","Other"]
         ave = []
         for t, num in zip(self.table, self.num):
             _ave = [x / num for x in t]
             ave.append(_ave)
-        for i, consensus in enumerate(l):
+        for i, target in enumerate(l):
             for j, predict in enumerate(l):
-                tag = "{}_{}".format(consensus,predict)
+                tag = "fold {}:{}_{}".format(fold, target ,predict)
                 wandb.log({tag: ave[i][j]}, step=step)

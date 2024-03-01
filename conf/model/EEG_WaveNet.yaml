@@ -1,0 +1,11 @@
+model_name : EEG_WaveNet
+
+input_channel : 1
+output_channel : 6
+kernel_size : 3
+dilation_rates : 
+  - 12
+  - 8
+  - 4
+  - 1
+drop_out : 0.0
